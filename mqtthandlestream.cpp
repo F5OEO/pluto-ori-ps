@@ -99,7 +99,7 @@ pthread_mutex_t buffer_mutextx;
 static char tmpstr[64];
 static struct iio_context *m_ctx = NULL;
 static struct iio_device *m_dev = NULL;
-//Channels variable
+// Channels variable
 static struct iio_buffer *m_rxbuf = NULL;
 static struct iio_buffer *m_txbuf = NULL;
 
@@ -116,17 +116,16 @@ static int m_offset;  // Current offset into the buffer
 
 /* Some usefull variabe to get */
 
-size_t m_latency = 20000; //Latency at 80ms by default
+size_t m_latency = 20000; // Latency at 80ms by default
 size_t Underflow = 0;
 size_t m_SR = 3000000;
 
 int m_sock;
 struct sockaddr_in m_client;
 
-size_t m_latencytx = 20000; //Latency at 80ms by default
+size_t m_latencytx = 20000; // Latency at 80ms by default
 size_t Underflowtx = 0;
 size_t m_SRtx = 3000000;
-
 
 enum
 {
@@ -137,14 +136,12 @@ size_t typeouput = output_stdout;
 
 void ResetDVBS2()
 {
-    
-    size_t value = ReadRegister(0x79020000+0x40BC);
-  
-    WriteRegister(0x79020000+0x40BC, (value & 0xFFF1) | 0);
- 
-    WriteRegister(0x79020000+0x40BC, (value & 0xFFF1) | 2);
-   
 
+    size_t value = ReadRegister(0x79020000 + 0x40BC);
+
+    WriteRegister(0x79020000 + 0x40BC, (value & 0xFFF1) | 0);
+    usleep(100);
+    WriteRegister(0x79020000 + 0x40BC, (value & 0xFFF1) | 2);
 }
 
 /* helper function generating channel names */
@@ -207,7 +204,6 @@ void udp_set_ip(const char *ip, const char *iface)
 inline void udp_send(char *b, int len)
 {
 
-    
     int index = 0;
     for (index = 0; index < len; index += UDP_BUFF_MAX_SIZE)
     {
@@ -232,21 +228,21 @@ void udp_init(void)
         fprintf(stderr, "UDP zerocopy mode failed\n");
     }
 
-    //SO_ZEROCOPY
-    //udp_set_ip("192.168.1.39:10000");
+    // SO_ZEROCOPY
+    // udp_set_ip("192.168.1.39:10000");
 }
 
 #define LOOPBACK_DISABLE 0
 #define LOOPBACK_TX2RX 1
 #define LOOPBACK_RX2TX 2
-void fmc_set_loopback(bool enable,int Type)
+void fmc_set_loopback(bool enable, int Type)
 {
-	//Type=LOOPBACK_RX2TX
-    if(enable)
-	    iio_device_debug_attr_write_longlong(m_rx,"loopback",Type);
+    // Type=LOOPBACK_RX2TX
+    if (enable)
+        iio_device_debug_attr_write_longlong(m_rx, "loopback", Type);
     else
     {
-        iio_device_debug_attr_write_longlong(m_rx,"loopback",LOOPBACK_DISABLE);
+        iio_device_debug_attr_write_longlong(m_rx, "loopback", LOOPBACK_DISABLE);
     }
 }
 
@@ -259,11 +255,11 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
     iio_context_set_timeout(m_ctx, 0);
 
     get_ad9361_stream_dev(m_ctx, RX, &m_rx);
-    //fprintf(stderr,"* Initializing AD9361 IIO streaming channels\n");
+    // fprintf(stderr,"* Initializing AD9361 IIO streaming channels\n");
     get_ad9361_stream_ch(RX, m_rx, 0, &m_rx0_i);
     get_ad9361_stream_ch(RX, m_rx, 1, &m_rx0_q);
 
-    fmc_set_loopback(true,LOOPBACK_TX2RX);
+    fmc_set_loopback(true, LOOPBACK_TX2RX);
 
     fprintf(stderr, "Rcv Stream with %u buffers of %d samples\n", nbBuffer, len);
     // Change the size of the buffer
@@ -288,7 +284,7 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
     if (m_rxbuf == NULL)
     {
         fprintf(stderr, "Could not allocate iio mem\n");
-        //exit(1);
+        // exit(1);
     }
 
     iio_buffer_set_blocking_mode(m_rxbuf, true);
@@ -310,13 +306,13 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     iio_context_set_timeout(m_ctx, 0);
 
     get_ad9361_stream_dev(m_ctx, TX, &m_tx);
-    //fprintf(stderr,"* Initializing AD9361 IIO streaming channels\n");
+    // fprintf(stderr,"* Initializing AD9361 IIO streaming channels\n");
     get_ad9361_stream_ch(TX, m_tx, 0, &m_tx0_i);
     get_ad9361_stream_ch(TX, m_tx, 1, &m_tx0_q);
 
     fprintf(stderr, "Tx Stream with %u buffers of %d samples\n", nbBuffer, len);
     // Change the size of the buffer
-    //m_max_len = len;
+    // m_max_len = len;
 
     if (m_txbuf)
     {
@@ -337,7 +333,7 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     if (m_txbuf == NULL)
     {
         fprintf(stderr, "Could not allocate iio mem tx\n");
-        //exit(1);
+        // exit(1);
     }
 
     iio_buffer_set_blocking_mode(m_txbuf, true);
@@ -364,11 +360,6 @@ void InitRxChannel(size_t LatencyMicro)
         if (BufferLenrx > UDP_BUFF_MAX_SIZE)
             BufferLenrx -= BufferLenrx % UDP_BUFF_MAX_SIZE;
         InitRxChannel(BufferLenrx, 4);
-        
-
-        
-
-        
     }
     if (m_format == 1) // CS8
     {
@@ -387,9 +378,9 @@ void InitRxChannel(size_t LatencyMicro)
         {
             BufferLenrx = burstsizerx;
         }
-        if(BufferLenrx<fftsize)
+        if (BufferLenrx < fftsize)
         {
-           BufferLenrx= fftsize;
+            BufferLenrx = fftsize;
         }
         InitRxChannel(BufferLenrx, 4);
     }
@@ -397,7 +388,7 @@ void InitRxChannel(size_t LatencyMicro)
     if (burstsizerx != 0)
     {
 
-        //BufferLenrx = burstsizerx*16;
+        // BufferLenrx = burstsizerx*16;
         int ret = fcntl(fileno(fdout), F_SETPIPE_SZ, burstsizerx * 2 * sizeof(short));
         PipeSize = fcntl(fileno(fdout), F_GETPIPE_SZ);
     }
@@ -416,20 +407,21 @@ void InitRxChannel(size_t LatencyMicro)
 void InitTxChannel(size_t LatencyMicro)
 {
 
-    //m_latency = LatencyMicro;
+    // m_latency = LatencyMicro;
     pthread_mutex_lock(&buffer_mutextx);
 
     if (m_formattx == 0) // CS16
     {
         BufferLentx = LatencyMicro * (m_SRtx / 1e6); // 12 because FFT transform
-        //if (BufferLentx > UDP_BUFF_MAX_SIZE)
-        //    BufferLentx -= BufferLentx % UDP_BUFF_MAX_SIZE;
-        //BufferLentx=3072+1; //3072+1 for fec 1/4_short IS WORKING,3072/2+1 OK, BUT NOT 3072/4+1 
-        //BufferLentx=3072/4+1; //3072 for fec 1/4_short
+        // if (BufferLentx > UDP_BUFF_MAX_SIZE)
+        //     BufferLentx -= BufferLentx % UDP_BUFF_MAX_SIZE;
+        // BufferLentx=3072+1; //3072+1 for fec 1/4_short IS WORKING,3072/2+1 OK, BUT NOT 3072/4+1
+        // BufferLentx=3072/4+1; //3072 for fec 1/4_short
 
-        BufferLentx=(1+(58192)/8)*16; //MAX BBFRAME LENGTH*4
+        //BufferLentx = (1 + (58192) / 8) * 16; // MAX BBFRAME LENGTH*4
+        BufferLentx = (((58192 / 8)+1)/8+1)*8 ; // MAX BBFRAME LENGTH aligned 8
         InitTxChannel(BufferLentx, 2);
-       
+
         fprintf(stderr, "ENd init\n");
     }
     /*
@@ -438,11 +430,11 @@ void InitTxChannel(size_t LatencyMicro)
         BufferLentx = LatencyMicro * (m_SR / 2 / 1e6); // 12 because FFT transform
         if (BufferLentx > UDP_BUFF_MAX_SIZE)
             BufferLentx -= BufferLentx % UDP_BUFF_MAX_SIZE;
-        InitTxChannel(BufferLentx, 4);    
+        InitTxChannel(BufferLentx, 4);
     }
     if (m_formattx == 2) // FFT
     {
-        
+
        BufferLentx = 600  * (m_SR / 1e6); // 12 because FFT transform
        BufferLentx -= BufferLentx % fftsize;        // FixMe shoudl be relataed to mode (fft or iq)
       InitTxChannel(BufferLentx, 4);
@@ -451,7 +443,7 @@ void InitTxChannel(size_t LatencyMicro)
     if (burstsizetx != 0)
     {
 
-        //BufferLenrx = burstsizerx*16;
+        // BufferLenrx = burstsizerx*16;
         int ret = fcntl(fileno(fdin), F_SETPIPE_SZ, burstsizetx * 2 * sizeof(short));
         PipeSize = fcntl(fileno(fdin), F_GETPIPE_SZ);
     }
@@ -483,10 +475,10 @@ ssize_t direct_rx_samples(short **RxBuffer)
     ssize_t nsamples_rx = 0;
     if (burstsizerx == 0) // Count only if no burstsizerx as in burtsmode we knwow that we are missing frames
     {
-        //uint64_t T0 = _timestamp_ns();
+        // uint64_t T0 = _timestamp_ns();
         nsamples_rx = iio_buffer_refill(m_rxbuf) / (2 * sizeof(short));
 
-        //if ((_timestamp_ns() - T0) / 1000 > m_latency)  fprintf(stderr, "refill  %llu us\n", (_timestamp_ns() - T0) / 1000);
+        // if ((_timestamp_ns() - T0) / 1000 > m_latency)  fprintf(stderr, "refill  %llu us\n", (_timestamp_ns() - T0) / 1000);
 
         if (nsamples_rx < 0)
         {
@@ -498,7 +490,7 @@ ssize_t direct_rx_samples(short **RxBuffer)
         // Code to know if underrun , but could maybe disturb at high SR ?
 
         uint32_t val = 0;
-        //https://wiki.analog.com/resources/fpga/docs/hdl/regmap
+        // https://wiki.analog.com/resources/fpga/docs/hdl/regmap
         int ret = iio_device_reg_read(m_rx, 0x80000088, &val);
         if (val & 4)
         {
@@ -509,17 +501,17 @@ ssize_t direct_rx_samples(short **RxBuffer)
         }
         else
         {
-            //fprintf(stderr,"*");  fflush(stderr);
+            // fprintf(stderr,"*");  fflush(stderr);
         }
     }
     else
     {
         bool underflow = false;
-        //do
+        // do
         {
             nsamples_rx = iio_buffer_refill(m_rxbuf) / (2 * sizeof(short));
             uint32_t val = 0;
-            //https://wiki.analog.com/resources/fpga/docs/hdl/regmap
+            // https://wiki.analog.com/resources/fpga/docs/hdl/regmap
             int ret = iio_device_reg_read(m_rx, 0x80000088, &val);
             if (val & 4)
             {
@@ -531,7 +523,7 @@ ssize_t direct_rx_samples(short **RxBuffer)
                 underflow = false;
             }
         }
-        //while (underflow == true);
+        // while (underflow == true);
         *RxBuffer = (short *)iio_buffer_start(m_rxbuf);
     }
     return nsamples_rx;
@@ -570,7 +562,7 @@ void *rx_buffer_thread(void *arg)
                 // int ret = ioctl(fileno(fdout), FIONREAD, &nout);
                 uint64_t T0 = _timestamp_ns();
 
-                //if ((_timestamp_ns() - T0) / 1000 > m_latency) fprintf(stderr, "Size %d Time %llu us\n", RxSize, (_timestamp_ns() - T0) / 1000);
+                // if ((_timestamp_ns() - T0) / 1000 > m_latency) fprintf(stderr, "Size %d Time %llu us\n", RxSize, (_timestamp_ns() - T0) / 1000);
 
                 if ((m_format == 0) || (m_format == 1))
                 {
@@ -582,7 +574,7 @@ void *rx_buffer_thread(void *arg)
                     }
                     break;
                 }
-                if ((m_format == 2)) //FFT
+                if ((m_format == 2)) // FFT
                 {
                     static bool fftaligned = false;
                     static int offset = 0;
@@ -591,7 +583,7 @@ void *rx_buffer_thread(void *arg)
                     ioctl(fileno(fdout), FIONREAD, &nout);
                     if (nout >= (int)(burstsizerx * 2 * sizeof(short)))
                     {
-                        //fprintf(stderr,"Pipe full %d\n",nout);
+                        // fprintf(stderr,"Pipe full %d\n",nout);
                         break;
                     }
 
@@ -620,14 +612,14 @@ void *rx_buffer_thread(void *arg)
 
             pthread_mutex_unlock(&buffer_mutexrx);
             current_time = _timestamp_ns();
-            //if((_timestamp_ns()-time_first)>m_latency*1000*2)  fprintf(stderr,"Time(ns) = %.0f us\n",(_timestamp_ns()-time_first)/1e3-m_latency);
+            // if((_timestamp_ns()-time_first)>m_latency*1000*2)  fprintf(stderr,"Time(ns) = %.0f us\n",(_timestamp_ns()-time_first)/1e3-m_latency);
             time_first = current_time;
         }
         else
         {
             usleep(m_latency);
         }
-        //pthread_mutex_unlock(&buffer_mutexrx);
+        // pthread_mutex_unlock(&buffer_mutexrx);
     }
 
     return NULL;
@@ -637,50 +629,51 @@ ssize_t write_from_file(FILE *fd, int len)
 {
 
     /*
-	if(iio_buffer_get_poll_fd(m_txbuf)<0)
-	{
-			fprintf(stderr,"Full\n");
-	}
+    if(iio_buffer_get_poll_fd(m_txbuf)<0)
+    {
+            fprintf(stderr,"Full\n");
+    }
     */
     int nout;
     /*
    do
    {
         ioctl(fileno(fd), FIONREAD, &nout);
-   } 
-   while(nout<2*BufferLentx*sizeof(short));   
+   }
+   while(nout<2*BufferLentx*sizeof(short));
    */
-  /*
-    int res=ioctl(fileno(fd), FIONREAD, &nout);
-    if(res<0) return -1;
+    /*
+      int res=ioctl(fileno(fd), FIONREAD, &nout);
+      if(res<0) return -1;
 
-    if (nout < 2 * len * sizeof(short))
-        return 0;
-        */
+      if (nout < 2 * len * sizeof(short))
+          return 0;
+          */
     short *buffpluto = (short *)iio_buffer_first(m_txbuf, m_tx0_i);
-    buffpluto[0]=0x00;
-    buffpluto[1]=0;
-    int Read = fread(&(buffpluto[2]), 2 * sizeof(short),len-1, fd);
-    //int Read = fread(buffpluto, 2 * sizeof(short),len, fd);
-    if(Read!=len-1)
+    buffpluto[0] = 0x00;
+    buffpluto[1] = 0;
+    int Read = fread(&(buffpluto[2]), 2 * sizeof(short), len - 1, fd);
+    // int Read = fread(buffpluto, 2 * sizeof(short),len, fd);
+    if (Read != len - 1)
     {
-        fprintf(stderr,"Only read %d / %d\n",Read,len);
+        fprintf(stderr, "Only read %d / %d\n", Read, len);
         return Read;
     }
 
-    
-    //int sent=iio_buffer_push_partial(m_txbuf,Read);
+    // int sent=iio_buffer_push_partial(m_txbuf,Read);
     size_t sent = iio_buffer_push(m_txbuf);
-    fprintf(stderr,"*");fflush(stderr);
-    
-	uint32_t val=0;
-	int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
-	if(val&1)
-	{
-		fprintf(stderr, "@");fflush(stderr);
-		iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits	
-	}
-    
+    fprintf(stderr, "*");
+    fflush(stderr);
+
+    uint32_t val = 0;
+    int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
+    if (val & 1)
+    {
+        fprintf(stderr, "@");
+        fflush(stderr);
+        iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
+    }
+
     return sent;
 }
 
@@ -700,84 +693,241 @@ ssize_t write_from_buffer(short *Buffer, int len)
     short *buffpluto = (short *)iio_buffer_start(m_txbuf);
     memcpy(buffpluto, Buffer, 2 * sizeof(short) * len);
 
-    size_t sent=iio_buffer_push_partial(m_txbuf,len);
-   // size_t sent = iio_buffer_push(m_txbuf);
-    fprintf(stderr,"*");fflush(stderr);
+    size_t sent = iio_buffer_push_partial(m_txbuf, len);
+    // size_t sent = iio_buffer_push(m_txbuf);
+    fprintf(stderr, "*");
+    fflush(stderr);
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
     if (val & 1)
     {
-        fprintf(stderr, "@");fflush(stderr);
+        fprintf(stderr, "@");
+        fflush(stderr);
         iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
     }
     return sent;
 }
 
-ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len)
+
+
+// https://github.com/phase4ground/dvb_fpga/blob/master/rtl/inline_config_adapter.vhd
+enum
 {
-   static unsigned char BufferLeft[4];
-   static int left=0;
-
-   int lensample=(len)/4;
-      
-    short *buffpluto = (short *)iio_buffer_start(m_txbuf);
-
-    memcpy(buffpluto,BufferLeft,left);
-    memcpy(buffpluto+left, Buffer, len);
-    
-    size_t sent=0;
-    sent=iio_buffer_push_partial(m_txbuf,(len+left)/4);
-    
-
-    left=(left+len)%4;
-    if(left>0)
-    {
-        fprintf(stderr,"left %d\n",left);
-        memcpy(BufferLeft,Buffer+len-left,left);
-    }
-
-   // size_t sent = iio_buffer_push(m_txbuf);
-    fprintf(stderr,"*");fflush(stderr);
-    uint32_t val = 0;
-    int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
-    if (val & 1)
-    {
-        fprintf(stderr, "@");fflush(stderr);
-        iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
-    }
-    return sent;
-}
-
-ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len)
+    shortframe,
+    longframe = 0x2c
+};
+enum
 {
-  static int cur_idx=0;
-      
-    unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
+    mod_qpsk,
+    mod_8psk = 0xB,
+    mod_16apsk = 0x16,
+    mod_32apsk = 0x21
+};
+enum
+{
+    C1_4,
+    C1_3,
+    C2_5,
+    C1_2,
+    C3_5,
+    C2_3,
+    C3_4,
+    C4_5,
+    C5_6,
+    C8_9,
+    C9_10
+};
+unsigned int BBFrameLenLut[] = {3072, 5232, 6312, 7032, 9552, 10632, 11712, 12432, 13152, 14232, 0,
+                                16008, 21408, 25728, 32208, 38688, 43040, 48048, 51648, 53840, 57472, 58192};
+unsigned char m_ModCode = 0;
+unsigned int m_BBFrameLenBit = 0;
+unsigned char m_CodeRate = 0xFF; // OxFF means not initialized
+unsigned char m_CodeConstel = 0; //QPSK
+ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len,bool reset);
+ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len,bool reset);
 
-    memcpy(buffpluto+cur_idx,Buffer,len);
-    cur_idx+=len;        
-    size_t sent=0;
-    if(cur_idx%4==0)
+void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
+{
+    static char OldModCode=0xFF;
+    if(CodeRate==0xFF) return;
+    if (BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate] % 32 != 0)
     {
-        //while(ReadRegister(0x43C10008)>=1) ;
-        //fprintf(stderr,"Depth %d\n",ReadRegister(0x43C10008));
-        sent=iio_buffer_push_partial(m_txbuf,cur_idx/4);
-       // system("./regs.sh");
-        cur_idx=0;
-        //fprintf(stderr,"*");fflush(stderr);
+        //fprintf(stderr, "Info : Modcod is not 32 bits aligned !!!! \n");
+        
+    }
+    
+    unsigned char     NewModCode = FrameType + Constellation + CodeRate;
+    
+
+    if(NewModCode!=OldModCode)
+    {
+        
+        write_byte_from_buffer_burst(NULL,0,true);
+        write_byte_from_buffer_split (NULL,0,true); //Done prior because m_code is still used
+        // ResetDVBS2();
+    m_BBFrameLenBit = BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate];
+    m_ModCode=NewModCode;
+    OldModCode=m_ModCode;
+        fprintf(stderr, "Modcode = %x Len (bit) = %d Len (Byte) = %d \n", m_ModCode, m_BBFrameLenBit, m_BBFrameLenBit / 8);
     }    
-    else
-        sent=0;    
-   // size_t sent = iio_buffer_push(m_txbuf);
+}
+
+/*
+it should be OK if the frame is not multiple of the AXI stream data width, the width converters should handle that, but for some reason that doesn't seem to be happening
+as for sending less than BB frame, every chunk of data needs the AXI metadata at the start, even if it's a continuation of a prev frame.
+For example, if the BB frame is 256 bytes, an entire frame would have 260 bytes (256 bytes of data + 4 bytes of metadata at the start)
+If you send 200 bytes for example, the first 4 bytes will be used as metadata and the remaining 196 bytes will be sent to the encoding process. If you send another 200 bytes, the same thing happens: the first 4 bytes will be taken off and assigned to the metadata and the remaining 196 bytes will be sent to the encoding process.
+So, at the end of sending 2 * 200 bytes, the encoder will have received 196*2 = 392 bytes, which is 1 BB frame of 256 bytes and 136 extra bytes that will be encoded in the next frame. The 256 bytes will use the encoding set in by the  first 4 bytes of the first 200 byte frame wile the following 136 bytes will be encoded using the first 4 bytes of the 2nd 200 byte frame
+
+
+
+
+
+19 h 45
+All in all, I think having the metadata at the start of the data stream is good if we have multiple streams, each one using potentially a different config (for example stream A has good SNR so we can use 9/10 and stream B has bad SNR so we prefer using 1/4)
+If we have a single stream, we can move the metadata to be set via AXI lite and send data in whatever size we want. The new config will be used in the next frame
+
+Coderate Sentbytes inputbeats
+0   8008    8004
+1   2680    2676
+2   3220    3212 !!! /4 -> impair , non diviosble par 8
+3   8056    8052
+4   4840    4836
+5   5384    5380
+6   12016   12012 
+7   6460    6452 !!! /4 impair
+8   13464   13460
+9   7188    7180 !!! /4 impair
+10  14552   14548 
+
+
+
+ ---> Go to split method with %8 and add metadata at each chunk
+Registers :
+ https://github.com/phase4ground/dvb_fpga/blob/master/third_party/airhdl/dvbs2_encoder_regs.md
+*/
+
+ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len,bool reset)
+{
+    static int cur_idx = 4;
+    if(reset)
+    {   
+         cur_idx=4;
+         return 0;
+    }     
+    unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
     
+    buffpluto[0] = m_ModCode;buffpluto[1]=0;buffpluto[2]=0;buffpluto[3]=0;
+
+    memcpy(buffpluto + cur_idx, Buffer, len);
+    cur_idx += len;
+    size_t sent = 0;
+    if (cur_idx % 4 == 0) // %4 should work but seems %8 should fix
+    {
+        // while(ReadRegister(0x43C10008)>=1) ;
+        // fprintf(stderr,"Depth %d\n",ReadRegister(0x43C10008));
+        sent = iio_buffer_push_partial(m_txbuf, cur_idx / 4);
+        // system("./regs.sh");
+        cur_idx = 4;
+
+        uint32_t val = 0;
+        int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
+        if (val & 1)
+        {
+            fprintf(stderr, "@");
+            fflush(stderr);
+            iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
+        }
+        // fprintf(stderr,"*");fflush(stderr);
+    }
+    else
+    {
+        /*buffpluto[cur_idx] = m_ModCode;
+        buffpluto[cur_idx+1] = 0;
+        buffpluto[cur_idx+2] = 0;
+        buffpluto[cur_idx+3] = 0;
+        cur_idx += 4; // AXI metadata*/
+        // fprintf(stderr,"curidx %d mod %d\n",cur_idx,cur_idx%8);fflush(stderr);
+        sent = 0;
+    }
+    
+    return sent;
+}
+
+ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len,bool reset)
+{
+    static unsigned char BufferLeft[8];
+    static int left = 0;
+
+    int ToSent=0;
+    short *buffpluto = (short *)iio_buffer_start(m_txbuf);
+    
+    unsigned char *buffplutometa = (unsigned char *)iio_buffer_start(m_txbuf);
+   
+    buffplutometa[0] = m_ModCode;buffplutometa[1]=0;buffplutometa[2]=0;buffplutometa[3]=0;
+    memcpy(buffplutometa+4, BufferLeft, left);
+    size_t sent = 0;
+    
+    if(reset)
+    {
+        
+        fprintf(stderr,"Loose %d in BBFRAME \n",left);
+        sent=0;
+           
+        if(left!=0)
+        {
+            int padding = 8-(4+left)%8;
+            memset(buffplutometa+4+left,0,padding); // -> Padding should be to complete the BBFrame ! (not only 16 aligned)
+            fprintf(stderr,"padding %d  \n",padding);
+            sent = iio_buffer_push_partial(m_txbuf, (4+left+padding) / 4);
+            fprintf(stderr,"Sent with padding %d\n",sent);
+        } 
+        
+        left=0; // We loose left bytes -> don't know how the encoder will handle it   : IT IS LOST !!
+       
+       return sent; 
+
+    }
+
+    
+    
+    ToSent=((4+left+len)/8)*8;
+    memcpy(buffplutometa + left+4, Buffer,ToSent ); // Fixme we transfer too much buffer (but not sent)
+
+    fprintf(stderr, "Try sending %d bytes\n",ToSent) ;
+    sent = iio_buffer_push_partial(m_txbuf, ToSent / 4);
+    //system("./regs.sh");
+    
+    left = (4+left + len) % 8;
+    if (left > 0)
+    {
+        fprintf(stderr, "left %d len %d tocpy %d\n", left,len,  len-1 - left);
+        memcpy(BufferLeft, Buffer + len-1 - left, left);
+    }
+
+    // size_t sent = iio_buffer_push(m_txbuf);
+    //fprintf(stderr, "*");
+    fflush(stderr);
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
     if (val & 1)
     {
-        fprintf(stderr, "@");fflush(stderr);
+        fprintf(stderr, "@");
+        fflush(stderr);
         iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
     }
     return sent;
+}
+
+ssize_t WriteTestBBFrame()
+{
+   static unsigned char * TestBBFrame = (unsigned char *) malloc(58192*8/8);
+    for (size_t i = 0; i < m_BBFrameLenBit / 8; i++)
+    {
+        TestBBFrame[i] = i % 256;
+    }
+    return write_byte_from_buffer_burst(TestBBFrame,m_BBFrameLenBit/8,false);
+    //return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
 }
 
 void *tx_buffer_thread(void *arg)
@@ -788,21 +938,21 @@ void *tx_buffer_thread(void *arg)
     int64_t time_first, current_time;
     time_first = _timestamp_ns();
     pthread_mutex_init(&buffer_mutextx, NULL);
-    //udp_init();
-    //strcpy(m_iface, "127.0.0.1");
-    //udp_set_ip("230.0.0.1:10000", m_iface);
-    #ifndef FPGA
+// udp_init();
+// strcpy(m_iface, "127.0.0.1");
+// udp_set_ip("230.0.0.1:10000", m_iface);
+#ifndef FPGA
     remove("/dev/tx1");
     mkfifo("/dev/tx1", 0666);
-    //fdin = fopen("/dev/tx1", "rb");
+    // fdin = fopen("/dev/tx1", "rb");
     fdin = fopen("test14_2.bb", "rb");
     if (fdin == NULL)
         fprintf(stderr, "Tx Pipe error\n");
-    #endif   
+#endif
     InitTxChannel(20000);
-    //InitTxChannel(20000);
+    // InitTxChannel(20000);
     short *Tone = (short *)malloc(BufferLentx * 2 * sizeof(short));
-    for (int i = 0; i < BufferLentx; i++)
+    for (size_t i = 0; i < BufferLentx; i++)
     {
         Tone[i * 2] = 0X7FFF;
         Tone[i * 2 + 1] = 0;
@@ -815,82 +965,7 @@ void *tx_buffer_thread(void *arg)
         Noise[i * 2 + 1] = (rand() * 0xFFFF) / RAND_MAX - 0x7FFF;
     }
 
-    unsigned char *pattern23 = (unsigned char *)malloc(43040/8+4);
-
-     pattern23[0]=0x31;
-     pattern23[1]=0x00;
-     //pattern23[0]=0x47;
-     pattern23[2]=0x00;
-    pattern23[3]=0x00; 
-    for (int i = 4; i < 43040/8+4; i++)
-    {
-        pattern23[i ] = 0;
-        
-    }
-
-     unsigned char *pattern238psk = (unsigned char *)malloc(43040/8+4);
-
-     pattern238psk[0]=0x3c;
-     pattern238psk[1]=0x00;
-     //pattern23[0]=0x47;
-     pattern238psk[2]=0x00;
-    pattern238psk[3]=0x00; 
-    for (int i = 4; i < 43040/8+4; i++)
-    {
-        pattern238psk[i ] = 0;
-        
-    }
-
-    unsigned char *pattern910 = (unsigned char *)malloc(58192/8+4);
-     pattern910[0]=0x36;
-     pattern910[1]=0x00;
-     pattern910[2]=0x00;
-     pattern910[3]=0x00;
-     
-    for (int i = 4; i < 58192/8+4; i++)
-    {
-        pattern910[i ] = 0;
-        
-    }
-
-     unsigned char *pattern56 = ( unsigned char *)malloc(53840/8+4);
-
-     pattern56[0]=0x34;
-     pattern56[1]=0x00;
-     pattern56[2]=0x00;
-     pattern56[3]=0x00;
-     
-    for (int i = 4; i < 53840/8+4; i++)
-    {
-        pattern56[i ] = 0;
-        
-    }
-
-    unsigned char *pattern568 = ( unsigned char *)malloc(53840/8+4);
-
-     pattern568[0]=0x3F;
-     pattern568[1]=0x00;
-     pattern568[2]=0x00;
-     pattern568[3]=0x00;
-     
-    for (int i = 4; i < 53840/8+4; i++)
-    {
-        pattern568[i ] = 0;
-        
-    }
-
-    unsigned char *pattern14 = (unsigned char  *)malloc(21408/8+4);
-
-    pattern14[0]=0x2D;
-     pattern14[1]=0x00;
-     pattern14[2]=0x00;
-     pattern14[3]=0x00;
-     
-    for (int i = 4; i < 21408/8+4; i++)
-    {
-        pattern14[i ] = 0;
-        
-    }
+    int testcoderate = 0;
     ResetDVBS2();
     while (true)
     {
@@ -901,90 +976,45 @@ void *tx_buffer_thread(void *arg)
 
             switch (typeouput)
             {
-                case output_stdout:
-                {
-                    #ifndef FPGA    
-                    ssize_t written = write_from_file(fdin, BufferLentx);
-                    #else
-                    static int count=0;
-                    size_t written=0;
-                     // written = write_byte_from_buffer_burst(pattern23,43040/8+4);
-                     /* 
-                     for(int i=0;i<10;i++)
-                     {
-                     written = write_byte_from_buffer_burst(pattern14,21408/8+4);
-                     while(written==0)
-                        {
-                           written = write_byte_from_buffer_burst(pattern14+4,21408/8);
-                        }
-                     } */  
+            case output_stdout:
+            {
+#ifndef FPGA
+                ssize_t written = write_from_file(fdin, BufferLentx);
+#else
+                static int count = 0;
+                size_t written = 0;
+                
+               if(m_CodeRate!=0xFF)
+               {
+                //SetModCode(longframe, mod_qpsk, m_CodeRate);
+                SetModCode(longframe, m_CodeConstel, m_CodeRate);
+                written = WriteTestBBFrame();
+               }
+                
+                count++;
+                //if(written!=0)                              fprintf(stderr, "Written %d Depth %d\n", written,ReadRegister(0x43C10D08));
+#endif
 
-                       
-                       
-                        //written = write_byte_from_buffer_burst(pattern23,43040/8+4);
-                        
-                       //if(count==0)
-                       {
-                        //written = write_byte_from_buffer_burst(pattern238psk,43040/8+4);
-                        
-                         written = write_byte_from_buffer_burst(pattern23,43040/8+4);
-                         written = write_byte_from_buffer_burst(pattern238psk,43040/8+4);
-                       }
-                        
-                        /*written = write_byte_from_buffer_burst(pattern910,58192/8+4);
-                        while(written==0)
-                        {
-                            written = write_byte_from_buffer_burst(pattern910+4,58192/8);
-                        }*/
-                        /*
-                        written = write_byte_from_buffer_burst(pattern568,53840/8+4);
-                        while(written==0)
-                        {
-                            written = write_byte_from_buffer_burst(pattern568+4,53840/8);
-                        }
-                        */
+                /*
+                                if(written==0)
+                                {
 
-                        /*
-                        written = write_byte_from_buffer_burst(pattern14,21408/8+4);
-                        while(written==0)
-                        {
-                            written = write_byte_from_buffer_burst(pattern14+4,21408/8);
-                        }
-                       */
-                      
-                                 //written = write_from_buffer((short *)pattern23,1+43040/4);
-                     //  written = write_from_buffer((short *)pattern14,2+3072/2);
-                     // written = write_from_buffer((short *)pattern56,1+53840/4);
-                      /*
-                    if(count%20<12)
-                             written = write_from_buffer((short *)pattern23,1+43040/8/4);
-                    else
-                          written = write_from_buffer((short *)pattern56,1+53840/8/4);
-                    */
-                    count++;    
-                    fprintf(stderr,"Written %d\n",written);
-                    #endif
-                    
-    /*
-                    if(written==0)
-                    {
-                       
-                        fclose(fdin);
-                         fdin = fopen("/dev/tx1", "rb");
-                        //freopen("/dev/tx1", "rb",fdin);
-                    }
-                    if(written<0)
-                    {
-                        fprintf(stderr,"CRITICAL ERROR ON READ FIFO");fflush(stdout);
-                        
-                    }
-                   */ 
-                    break;
-                }
-                case output_udp:
-                {
-                    break;
-                }
+                                    fclose(fdin);
+                                     fdin = fopen("/dev/tx1", "rb");
+                                    //freopen("/dev/tx1", "rb",fdin);
+                                }
+                                if(written<0)
+                                {
+                                    fprintf(stderr,"CRITICAL ERROR ON READ FIFO");fflush(stdout);
+
+                                }
+                               */
+                break;
+            }
+            case output_udp:
+            {
+                break;
+            }
             }
 
             pthread_mutex_unlock(&buffer_mutextx);
@@ -1004,7 +1034,7 @@ bool publish(char *mqttkey, float value)
     sprintf(svalue, "%.0f", value);
     char pubkey[255];
     sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-    //fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
+    // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
     mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
     return true;
 }
@@ -1013,7 +1043,7 @@ bool publish(char *mqttkey, char *svalue)
 {
     char pubkey[255];
     sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-    //fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
+    // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
     mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
     return true;
 }
@@ -1023,7 +1053,7 @@ bool publishstatus(char *iio_key, char *mqttkey)
     FILE *fdread = NULL;
     fdread = fopen(iio_key, "r");
     char svalue[255];
-    //fgets(svalue,255,fdread);
+    // fgets(svalue,255,fdread);
     fscanf(fdread, "%s", svalue); // To avoid getting units
     fclose(fdread);
     fprintf(stderr, "%s %s\n", iio_key, svalue);
@@ -1062,7 +1092,8 @@ bool SendCommand(char *skey, char *svalue)
 }
 
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
-                      "rx/stream/average", "tx/stream/run" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/, ""};
+                      "rx/stream/average", "tx/stream/run" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
+                      "tx/dvbs2/coderate","tx/dvbs2/constel", ""};
 enum defidx
 {
     listcmd,
@@ -1071,8 +1102,10 @@ enum defidx
     cmd_rxstreamoutputtype,
     cmd_rxstreamburst,
     cmd_rxstreamaverage,
-    cmd_txstreamrun
-    
+    cmd_txstreamrun,
+    cmd_txdvbs2coderate,
+    cmd_txdvbs2constellation
+
 };
 
 bool publishcmd()
@@ -1085,7 +1118,7 @@ bool publishcmd()
         strcat(svalue, ",");
     }
     publish("listcmd_stream", (char *)svalue);
-    //mosquitto_publish(m_mosq, NULL, "listcmd", strlen(svalue), svalue, 2, false);
+    // mosquitto_publish(m_mosq, NULL, "listcmd", strlen(svalue), svalue, 2, false);
     return true;
 }
 
@@ -1219,14 +1252,46 @@ bool HandleCommand(char *key, char *svalue)
             publish("tx/stream/run", "0");
         break;
     }
-    
+    case cmd_txdvbs2coderate:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+            publish("tx/dvbs2/coderate", m_CodeRate);
+            break;
+        }
+        m_CodeRate = atoi(svalue);
+        publish("tx/dvbs2/coderate", m_CodeRate);
+        break;
+    }
+    case cmd_txdvbs2constellation:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {   
+            switch(m_CodeConstel)
+            {
+                case mod_qpsk: publish("tx/dvbs2/constel", "qpsk");break;
+                case mod_8psk: publish("tx/dvbs2/constel", "8psk");break;
+                case mod_16apsk: publish("tx/dvbs2/constel", "16apsk");break;
+                 case mod_32apsk: publish("tx/dvbs2/constel", "32apsk");break;
+               
+            }
+            
+            break;
+        }
+        if(strcmp(svalue,"qpsk")==0) m_CodeConstel = mod_qpsk;
+        if(strcmp(svalue,"8psk")==0) m_CodeConstel = mod_8psk;
+        if(strcmp(svalue,"16apsk")==0) m_CodeConstel = mod_16apsk;
+        if(strcmp(svalue,"32apsk")==0) m_CodeConstel = mod_32apsk;
+        publish("tx/dvbs2/constel", svalue);
+        break;
+    }
     }
     return true;
 }
 
 bool HandleStatus(char *key, char *svalue)
 {
-    //fprintf(stderr,"Handle status %s\n",key);
+    // fprintf(stderr,"Handle status %s\n",key);
     if (strcmp(key, "rx/finalsr") == 0)
     {
         if (atol(svalue) != m_SR)
