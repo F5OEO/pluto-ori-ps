@@ -52,6 +52,9 @@
 #include <fcntl.h>
 #include "iiofshelper.h"
 
+#include "./dvbs2neon/dvbs2neon.h"
+#include "./dvbs2neon/bbframe23.h"
+
 using namespace std;
 
 /* RX is input, TX is output */
@@ -134,6 +137,13 @@ enum
 };
 size_t typeouput = output_stdout;
 
+static DVB2FrameFormat fmt;
+
+uchar BBFrameNeonBuff[144000] __attribute__((aligned(128)));
+uchar symbolbuff[144 * 1024] __attribute__((aligned(16)));
+
+bool m_fpga = true;
+
 void ResetDVBS2()
 {
 
@@ -142,6 +152,35 @@ void ResetDVBS2()
     WriteRegister(0x79020000 + 0x40BC, (value & 0xFFF1) | 0);
     usleep(100);
     WriteRegister(0x79020000 + 0x40BC, (value & 0xFFF1) | 2);
+
+    int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
+    // int status1 = dvbs2neon_control (STREAM0,CONTROL_GET_LAST_BBFRAME, (uint32)BBFrameNeonBuff, 0) ;
+    int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, 0);
+    // fprintf(stderr,"dvbs2neon status %d \n",status1);
+}
+
+#define switchsrc 0x43C00000
+#define switchdest 0x43C20000
+void SetFPGAMode(bool dvbs2)
+{
+    if (dvbs2)
+    {
+        WriteRegister(switchsrc + 0x40, 0x00);       // SI0->MI0
+        WriteRegister(switchsrc + 0x44, 0x80000000); // MI1 unused
+        WriteRegister(switchsrc + 0x00, 0x02);
+
+        WriteRegister(switchdest + 0x40, 0x00); // SI0->MI0
+        WriteRegister(switchdest + 0x00, 0x02);
+    }
+    else
+    {
+        WriteRegister(switchsrc + 0x40, 0x80000000); // MI0 unused
+        WriteRegister(switchsrc + 0x44, 0x0);        // SI0-> MI1
+        WriteRegister(switchsrc + 0x00, 0x02);
+
+        WriteRegister(switchdest + 0x40, 0x01); // SI1->MI0
+        WriteRegister(switchdest + 0x00, 0x02);
+    }
 }
 
 /* helper function generating channel names */
@@ -259,8 +298,6 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
     get_ad9361_stream_ch(RX, m_rx, 0, &m_rx0_i);
     get_ad9361_stream_ch(RX, m_rx, 1, &m_rx0_q);
 
-    fmc_set_loopback(true, LOOPBACK_TX2RX);
-
     fprintf(stderr, "Rcv Stream with %u buffers of %d samples\n", nbBuffer, len);
     // Change the size of the buffer
     m_max_len = len;
@@ -278,6 +315,8 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
     //	printf("* Enabling IIO streaming channels\n");
     iio_channel_enable(m_rx0_i);
     iio_channel_enable(m_rx0_q);
+
+    fmc_set_loopback(true, LOOPBACK_TX2RX);
 
     m_rxbuf = iio_device_create_buffer(m_rx, len, false);
 
@@ -418,8 +457,9 @@ void InitTxChannel(size_t LatencyMicro)
         // BufferLentx=3072+1; //3072+1 for fec 1/4_short IS WORKING,3072/2+1 OK, BUT NOT 3072/4+1
         // BufferLentx=3072/4+1; //3072 for fec 1/4_short
 
-        //BufferLentx = (1 + (58192) / 8) * 16; // MAX BBFRAME LENGTH*4
-        BufferLentx = (((58192 / 8)+1)/8+1)*8 ; // MAX BBFRAME LENGTH aligned 8
+        // BufferLentx = (1 + (58192) / 8) * 16; // MAX BBFRAME LENGTH*4
+        BufferLentx = ((58192 / 4) + 1) * 10; // MAX BBFRAME LENGTH aligned 8
+        // BufferLentx = ((5380/4 + 1) ) ; // MAX BBFRAME LENGTH aligned 8
         InitTxChannel(BufferLentx, 2);
 
         fprintf(stderr, "ENd init\n");
@@ -543,7 +583,7 @@ void *rx_buffer_thread(void *arg)
     mkfifo("/dev/rx1", 0666);
     fdout = fopen("/dev/rx1", "wb");
     // For fpga recording
-    fdout = fopen("/tmp/rxiq", "wb");
+    // fdout = fopen("/tmp/rxiq", "wb");
     InitRxChannel(20000);
 
     while (true)
@@ -695,8 +735,8 @@ ssize_t write_from_buffer(short *Buffer, int len)
 
     size_t sent = iio_buffer_push_partial(m_txbuf, len);
     // size_t sent = iio_buffer_push(m_txbuf);
-    fprintf(stderr, "*");
-    fflush(stderr);
+    // fprintf(stderr, "*");
+    // fflush(stderr);
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
     if (val & 1)
@@ -707,8 +747,6 @@ ssize_t write_from_buffer(short *Buffer, int len)
     }
     return sent;
 }
-
-
 
 // https://github.com/phase4ground/dvb_fpga/blob/master/rtl/inline_config_adapter.vhd
 enum
@@ -738,38 +776,81 @@ enum
     C9_10
 };
 unsigned int BBFrameLenLut[] = {3072, 5232, 6312, 7032, 9552, 10632, 11712, 12432, 13152, 14232, 0,
-                                16008, 21408, 25728, 32208, 38688, 43040, 48048, 51648, 53840, 57472, 58192};
+                                16008, 21408, 25728, 32208, 38688, 43040, 48408, 51648, 53840, 57472, 58192};
 unsigned char m_ModCode = 0;
 unsigned int m_BBFrameLenBit = 0;
 unsigned char m_CodeRate = 0xFF; // OxFF means not initialized
-unsigned char m_CodeConstel = 0; //QPSK
-ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len,bool reset);
-ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len,bool reset);
+unsigned char m_CodeConstel = 0; // QPSK
+unsigned char m_CodeFrame=longframe;
+ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len, bool reset);
+ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len, bool reset);
 
 void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
 {
-    static char OldModCode=0xFF;
-    if(CodeRate==0xFF) return;
+    static char OldModCode = 0xFF;
+    if (CodeRate == 0xFF)
+        return;
     if (BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate] % 32 != 0)
     {
-        //fprintf(stderr, "Info : Modcod is not 32 bits aligned !!!! \n");
-        
+        // fprintf(stderr, "Info : Modcod is not 32 bits aligned !!!! \n");
     }
-    
-    unsigned char     NewModCode = FrameType + Constellation + CodeRate;
-    
 
-    if(NewModCode!=OldModCode)
+    unsigned char NewModCode = FrameType + Constellation + CodeRate;
+
+    if (NewModCode != OldModCode)
     {
+
+        write_byte_from_buffer_burst(NULL, 0, true);
+        // write_byte_from_buffer_split(NULL, 0, true); // Done prior because m_code is still used
+        if( BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate]==0)
+        {
+            fprintf(stderr,"Coderate illegal\n");
+            return;
+        } 
+        m_BBFrameLenBit = BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate];
         
-        write_byte_from_buffer_burst(NULL,0,true);
-        write_byte_from_buffer_split (NULL,0,true); //Done prior because m_code is still used
-        // ResetDVBS2();
-    m_BBFrameLenBit = BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate];
-    m_ModCode=NewModCode;
-    OldModCode=m_ModCode;
+        if ((m_BBFrameLenBit / 8 + 4) % 8 != 0)
+        {
+            fprintf(stderr, "Wokaround , Lost BBFrame Sync %d\n", (m_BBFrameLenBit / 8 + 4) % 8);
+            ResetDVBS2();
+        }
+        m_ModCode = NewModCode;
+        OldModCode = m_ModCode;
         fprintf(stderr, "Modcode = %x Len (bit) = %d Len (Byte) = %d \n", m_ModCode, m_BBFrameLenBit, m_BBFrameLenBit / 8);
-    }    
+
+        {
+            int status = dvbs2neon_control(STREAM0, CONTROL_SET_OUTPUT_BUFFER, (uint32)BBFrameNeonBuff, 0); // CONTROL_SET_OUTPUT_BUFFER
+            fprintf(stderr, "Status %d \n", status);
+        }
+
+        switch (Constellation)
+        {
+        case mod_qpsk:
+            fmt.constellation = M_QPSK;
+            break;
+        case mod_8psk:
+            fmt.constellation = M_8PSK;
+            break;
+        case mod_16apsk:
+            fmt.constellation = M_16APSK;
+            break;
+        case mod_32apsk:
+            fmt.constellation = M_32APSK;
+            break;
+        default:
+            fmt.constellation = M_QPSK;
+        }
+        fmt.fec = CodeRate;
+        fmt.frame_type = (FrameType == shortframe) ? FRAME_SHORT : FRAME_NORMAL;
+        fmt.output_format = OUTPUT_FORMAT_SYMBOLS; // OUTPUT_FORMAT_BBFRAME is segfault
+        fmt.pilots = PILOTS_OFF;
+        fmt.roll_off = RO_0_35;
+
+        // fprintf(stderr, "Trying to set dvbs2neon \n");
+        int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
+        modulator_mapping(fmt.constellation, CodeRate);
+        fprintf(stderr, "Status dvbs2neon_control %d \n", status);
+    }
 }
 
 /*
@@ -794,11 +875,11 @@ Coderate Sentbytes inputbeats
 3   8056    8052
 4   4840    4836
 5   5384    5380
-6   12016   12012 
+6   12016   12012
 7   6460    6452 !!! /4 impair
 8   13464   13460
 9   7188    7180 !!! /4 impair
-10  14552   14548 
+10  14552   14548
 
 
 
@@ -807,25 +888,40 @@ Registers :
  https://github.com/phase4ground/dvb_fpga/blob/master/third_party/airhdl/dvbs2_encoder_regs.md
 */
 
-ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len,bool reset)
+ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len, bool reset)
 {
     static int cur_idx = 4;
-    if(reset)
-    {   
-         cur_idx=4;
-         return 0;
-    }     
-    unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
-    
-    buffpluto[0] = m_ModCode;buffpluto[1]=0;buffpluto[2]=0;buffpluto[3]=0;
+    if (reset)
+    {
+        cur_idx = 4;
+
+        return 0;
+    }
+    // unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
+    unsigned char *buffpluto = (unsigned char *)iio_buffer_first(m_txbuf, m_tx0_i);
+    buffpluto[0] = m_ModCode;
+    buffpluto[1] = 0;
+    buffpluto[2] = 0;
+    buffpluto[3] = 0;
 
     memcpy(buffpluto + cur_idx, Buffer, len);
+
     cur_idx += len;
     size_t sent = 0;
     if (cur_idx % 4 == 0) // %4 should work but seems %8 should fix
     {
-        // while(ReadRegister(0x43C10008)>=1) ;
-        // fprintf(stderr,"Depth %d\n",ReadRegister(0x43C10008));
+// while(ReadRegister(0x43C10008)>=1) ;
+// fprintf(stderr,"Depth %d\n",ReadRegister(0x43C10008));
+#ifdef DEBUGFRAME
+        for (int i = 0; i < len; i++)
+        {
+
+            if (i % 16 == 0)
+                fprintf(stderr, "\n%.4x ", i);
+            fprintf(stderr, "%.2x ", Buffer[i]);
+        }
+        fprintf(stderr, "\n");
+#endif
         sent = iio_buffer_push_partial(m_txbuf, cur_idx / 4);
         // system("./regs.sh");
         cur_idx = 4;
@@ -847,66 +943,66 @@ ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len,bool reset)
         buffpluto[cur_idx+2] = 0;
         buffpluto[cur_idx+3] = 0;
         cur_idx += 4; // AXI metadata*/
-        // fprintf(stderr,"curidx %d mod %d\n",cur_idx,cur_idx%8);fflush(stderr);
+        // fprintf(stderr,"curidx %d mod %d\n",cur_idx,cur_idx%4);fflush(stderr);
         sent = 0;
     }
-    
+
     return sent;
 }
 
-ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len,bool reset)
+ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len, bool reset)
 {
     static unsigned char BufferLeft[8];
     static int left = 0;
 
-    int ToSent=0;
+    int ToSent = 0;
     short *buffpluto = (short *)iio_buffer_start(m_txbuf);
-    
-    unsigned char *buffplutometa = (unsigned char *)iio_buffer_start(m_txbuf);
-   
-    buffplutometa[0] = m_ModCode;buffplutometa[1]=0;buffplutometa[2]=0;buffplutometa[3]=0;
-    memcpy(buffplutometa+4, BufferLeft, left);
-    size_t sent = 0;
-    
-    if(reset)
-    {
-        
-        fprintf(stderr,"Loose %d in BBFRAME \n",left);
-        sent=0;
-           
-        if(left!=0)
-        {
-            int padding = 8-(4+left)%8;
-            memset(buffplutometa+4+left,0,padding); // -> Padding should be to complete the BBFrame ! (not only 16 aligned)
-            fprintf(stderr,"padding %d  \n",padding);
-            sent = iio_buffer_push_partial(m_txbuf, (4+left+padding) / 4);
-            fprintf(stderr,"Sent with padding %d\n",sent);
-        } 
-        
-        left=0; // We loose left bytes -> don't know how the encoder will handle it   : IT IS LOST !!
-       
-       return sent; 
 
+    unsigned char *buffplutometa = (unsigned char *)iio_buffer_start(m_txbuf);
+
+    buffplutometa[0] = m_ModCode;
+    buffplutometa[1] = 0;
+    buffplutometa[2] = 0;
+    buffplutometa[3] = 0;
+    memcpy(buffplutometa + 4, BufferLeft, left);
+    size_t sent = 0;
+
+    if (reset)
+    {
+
+        fprintf(stderr, "Loose %d in BBFRAME \n", left);
+        sent = 0;
+
+        if (left != 0)
+        {
+            int padding = 8 - (4 + left) % 8;
+            memset(buffplutometa + 4 + left, 0, padding); // -> Padding should be to complete the BBFrame ! (not only 16 aligned)
+            fprintf(stderr, "padding %d  \n", padding);
+            sent = iio_buffer_push_partial(m_txbuf, (4 + left + padding) / 4);
+            fprintf(stderr, "Sent with padding %d\n", sent);
+        }
+
+        left = 0; // We loose left bytes -> don't know how the encoder will handle it   : IT IS LOST !!
+
+        return sent;
     }
 
-    
-    
-    ToSent=((4+left+len)/8)*8;
-    memcpy(buffplutometa + left+4, Buffer,ToSent ); // Fixme we transfer too much buffer (but not sent)
+    ToSent = ((4 + left + len) / 8) * 8;
+    memcpy(buffplutometa + left + 4, Buffer, ToSent); // Fixme we transfer too much buffer (but not sent)
 
-    fprintf(stderr, "Try sending %d bytes\n",ToSent) ;
+    fprintf(stderr, "Try sending %d bytes\n", ToSent);
     sent = iio_buffer_push_partial(m_txbuf, ToSent / 4);
-    //system("./regs.sh");
-    
-    left = (4+left + len) % 8;
+    // system("./regs.sh");
+
+    left = (4 + left + len) % 8;
     if (left > 0)
     {
-        fprintf(stderr, "left %d len %d tocpy %d\n", left,len,  len-1 - left);
-        memcpy(BufferLeft, Buffer + len-1 - left, left);
+        fprintf(stderr, "left %d len %d tocpy %d\n", left, len, len - 1 - left);
+        memcpy(BufferLeft, Buffer + len - 1 - left, left);
     }
 
     // size_t sent = iio_buffer_push(m_txbuf);
-    //fprintf(stderr, "*");
+    // fprintf(stderr, "*");
     fflush(stderr);
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
@@ -921,13 +1017,75 @@ ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len,bool reset)
 
 ssize_t WriteTestBBFrame()
 {
-   static unsigned char * TestBBFrame = (unsigned char *) malloc(58192*8/8);
-    for (size_t i = 0; i < m_BBFrameLenBit / 8; i++)
+    static unsigned char *TestBBFrame = (unsigned char *)malloc(58192 * 8 / 8);
+    static unsigned char GSEHeader[] = {0x70, 0x00, 0x00, 0x00, 0x96, 0xd0, 0xee, 0xcc, 0xcc, 0xe7}; // FEC 3/5
+    int headerlen = sizeof(GSEHeader);
+
+    for (size_t i = headerlen; i < m_BBFrameLenBit / 8; i++)
     {
         TestBBFrame[i] = i % 256;
     }
-    return write_byte_from_buffer_burst(TestBBFrame,m_BBFrameLenBit/8,false);
-    //return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
+    return write_byte_from_buffer_burst(TestBBFrame, m_BBFrameLenBit / 8, false);
+    // return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
+}
+
+ssize_t WriteReadBBFrame()
+{
+    static unsigned char *TestBBFrame = (unsigned char *)malloc(58192 / 8 * 4);
+    int Read = fread(TestBBFrame, 1, m_BBFrameLenBit / 8, fdin);
+    if (Read < m_BBFrameLenBit / 8)
+    {
+        fseek(fdin, 0, SEEK_SET);
+        fread(TestBBFrame, 1, m_BBFrameLenBit / 8, fdin);
+        fprintf(stderr, "Wrap\n");
+    }
+    return write_byte_from_buffer_burst(TestBBFrame, m_BBFrameLenBit / 8, false);
+    // return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
+}
+
+ssize_t WriteTestTS(bool fpga)
+{
+
+    unsigned char NullPacket[188] = {0x47, 0x1F, 0xFE, 0x10, 'F', '5', 'O', 'E', 'O'};
+    unsigned char *bbframeptr = NULL;
+    size_t packet = 0;
+    static unsigned char cc = 0;
+    while (bbframeptr == NULL)
+    {
+        NullPacket[3] = 0x10 + cc;
+        cc = (cc + 1) % 16;
+        bbframeptr = (unsigned char *)dvbs2neon_packet(0, (uint32)(NullPacket), 0);
+        packet++;
+    }
+    // fprintf(stderr, " Get symbols after %d packets \n",packet);
+    if (fpga)
+    {
+        bbframeptr = (unsigned char *)dvbs2neon_control(STREAM0, CONTROL_GET_LAST_BBFRAME, (uint32)BBFrameNeonBuff, 0);
+
+        unsigned short *p16 = (unsigned short *)bbframeptr;
+        unsigned short ByteCount = p16[-1];
+        uchar *p8 = (uchar *)bbframeptr;
+        uchar output_format = p8[-3];
+        uchar fec = p8[-5];
+        uchar frame_type = p8[-7];
+
+        // fprintf(stderr, " Get BBframe of len %d/%d outputformat %d fec %d frametype %d \n",  ByteCount, m_BBFrameLenBit / 8, output_format, fec, frame_type);
+        if (ByteCount != m_BBFrameLenBit / 8)
+            fprintf(stderr, "BBFrame len mismatch fpga %d dvbneon %d\n", ByteCount, m_BBFrameLenBit / 8);
+        return write_byte_from_buffer_burst(bbframeptr, ByteCount, false);
+    }
+    else
+    {
+        static sfcmplx *Frame = (sfcmplx *)malloc(144000 * sizeof(sfcmplx));
+        unsigned short *p16 = (unsigned short *)bbframeptr;
+        unsigned short ByteCount = p16[-1];
+        for (int n = 0; n < ByteCount; n++)
+            Frame[n] = symbol_lut[bbframeptr[n]];
+        return write_from_buffer((short *)Frame, ByteCount);
+    }
+
+    // return write_byte_from_buffer_burst(bbf23,m_BBFrameLenBit/8, false);
+    //  return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
 }
 
 void *tx_buffer_thread(void *arg)
@@ -949,6 +1107,7 @@ void *tx_buffer_thread(void *arg)
     if (fdin == NULL)
         fprintf(stderr, "Tx Pipe error\n");
 #endif
+    fdin = fopen("a-94-bbframes-of-4836-bytes-sr333-qp35-ln35", "rb");
     InitTxChannel(20000);
     // InitTxChannel(20000);
     short *Tone = (short *)malloc(BufferLentx * 2 * sizeof(short));
@@ -966,6 +1125,8 @@ void *tx_buffer_thread(void *arg)
     }
 
     int testcoderate = 0;
+
+    SetFPGAMode(m_fpga);
     ResetDVBS2();
     while (true)
     {
@@ -983,16 +1144,19 @@ void *tx_buffer_thread(void *arg)
 #else
                 static int count = 0;
                 size_t written = 0;
-                
-               if(m_CodeRate!=0xFF)
-               {
-                //SetModCode(longframe, mod_qpsk, m_CodeRate);
-                SetModCode(longframe, m_CodeConstel, m_CodeRate);
-                written = WriteTestBBFrame();
-               }
-                
+
+                if (m_CodeRate != 0xFF)
+                {
+                    // SetModCode(longframe, mod_qpsk, m_CodeRate);
+                    SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate);
+                    // written = WriteTestBBFrame();
+                    // m_CodeRate=0xFF;//Once
+                    written = WriteTestTS(m_fpga);
+                    // written= WriteReadBBFrame();
+                }
+
                 count++;
-                //if(written!=0)                              fprintf(stderr, "Written %d Depth %d\n", written,ReadRegister(0x43C10D08));
+                // if(written!=0)                              fprintf(stderr, "Written %d Depth %d\n", written,ReadRegister(0x43C10D08));
 #endif
 
                 /*
@@ -1093,7 +1257,7 @@ bool SendCommand(char *skey, char *svalue)
 
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
                       "rx/stream/average", "tx/stream/run" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
-                      "tx/dvbs2/coderate","tx/dvbs2/constel", ""};
+                      "tx/dvbs2/coderate", "tx/dvbs2/constel", "tx/dvbs2/frame",""};
 enum defidx
 {
     listcmd,
@@ -1104,7 +1268,8 @@ enum defidx
     cmd_rxstreamaverage,
     cmd_txstreamrun,
     cmd_txdvbs2coderate,
-    cmd_txdvbs2constellation
+    cmd_txdvbs2constellation,
+    cmd_txdvbs2frame
 
 };
 
@@ -1266,24 +1431,56 @@ bool HandleCommand(char *key, char *svalue)
     case cmd_txdvbs2constellation:
     {
         if (strcmp(svalue, "?") == 0)
-        {   
-            switch(m_CodeConstel)
+        {
+            switch (m_CodeConstel)
             {
-                case mod_qpsk: publish("tx/dvbs2/constel", "qpsk");break;
-                case mod_8psk: publish("tx/dvbs2/constel", "8psk");break;
-                case mod_16apsk: publish("tx/dvbs2/constel", "16apsk");break;
-                 case mod_32apsk: publish("tx/dvbs2/constel", "32apsk");break;
-               
+            case mod_qpsk:
+                publish("tx/dvbs2/constel", "qpsk");
+                break;
+            case mod_8psk:
+                publish("tx/dvbs2/constel", "8psk");
+                break;
+            case mod_16apsk:
+                publish("tx/dvbs2/constel", "16apsk");
+                break;
+            case mod_32apsk:
+                publish("tx/dvbs2/constel", "32apsk");
+                break;
             }
-            
+
             break;
         }
-        if(strcmp(svalue,"qpsk")==0) m_CodeConstel = mod_qpsk;
-        if(strcmp(svalue,"8psk")==0) m_CodeConstel = mod_8psk;
-        if(strcmp(svalue,"16apsk")==0) m_CodeConstel = mod_16apsk;
-        if(strcmp(svalue,"32apsk")==0) m_CodeConstel = mod_32apsk;
+        if (strcmp(svalue, "qpsk") == 0)
+            m_CodeConstel = mod_qpsk;
+        if (strcmp(svalue, "8psk") == 0)
+            m_CodeConstel = mod_8psk;
+        if (strcmp(svalue, "16apsk") == 0)
+            m_CodeConstel = mod_16apsk;
+        if (strcmp(svalue, "32apsk") == 0)
+            m_CodeConstel = mod_32apsk;
         publish("tx/dvbs2/constel", svalue);
         break;
+    }
+    case cmd_txdvbs2frame:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+            switch (m_CodeFrame)
+            {
+            case shortframe:
+                publish("tx/dvbs2/frame", "short");
+                break;
+            case longframe:
+                publish("tx/dvbs2/frame", "long");
+                break;
+            }
+            break;
+        }
+        if (strcmp(svalue, "short") == 0)
+            m_CodeFrame = shortframe;
+        if (strcmp(svalue, "long") == 0)
+            m_CodeFrame = longframe;
+        publish("tx/dvbs2/frame", svalue);    
     }
     }
     return true;
