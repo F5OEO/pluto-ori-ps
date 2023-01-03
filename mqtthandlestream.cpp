@@ -55,6 +55,8 @@
 #include "./dvbs2neon/dvbs2neon.h"
 #include "./dvbs2neon/bbframe23.h"
 
+//#include "mygse/bbheader_sink_impl.h"
+
 using namespace std;
 
 /* RX is input, TX is output */
@@ -64,6 +66,7 @@ enum iodev
     TX
 };
 #define UDP_BUFF_MAX_SIZE (1472)
+#define UDP_BUFF_MAX_BBFRAME (58192 / 8)
 char sCmdRoot[255];
 char sDtRoot[255];
 char m_addport[255];
@@ -183,6 +186,36 @@ void SetFPGAMode(bool dvbs2)
     }
 }
 
+// https://github.com/phase4ground/dvb_fpga/blob/master/third_party/airhdl/dvbs2_encoder_regs.md
+#define DVBS2Register 0x43C10000
+void SetDVBS2Constellation()
+{
+    int16_t imap;
+    int16_t qmap;    
+    size_t Reg;    
+    for(size_t i=0;i<12;i++)
+    {
+        size_t Reg= ReadRegister(DVBS2Register+0xC+i*4);
+        int16_t imap=(int16_t)(Reg>>16);
+        int16_t qmap=(int16_t)(Reg&0xFFFF);    
+        if(i<4)
+            fprintf(stderr,"QPSKMap[%d]=%x %d %d\n",i,Reg,imap,qmap);
+        if((i>=4)&&(i<12))
+            fprintf(stderr,"8PSKMap[%d]=%x %d %d\n",i,Reg,imap,qmap);
+        
+    }
+    imap=0x5AB1;    
+    qmap=0x5AB1;
+    Reg=(((size_t)imap)<<16) | ((size_t)qmap);   
+    WriteRegister(DVBS2Register+0xC,Reg);
+    /*
+    imap=-0x7FFF;    
+    qmap=-0x7FFF;
+    Reg=(((size_t)imap)<<16) | ((size_t)qmap);   
+    WriteRegister(0x43C1000C+4,Reg);
+    */
+}
+
 /* helper function generating channel names */
 static char *get_ch_name(const char *type, int id)
 {
@@ -249,6 +282,13 @@ inline void udp_send(char *b, int len)
 
         sendto(m_sock, b + index, UDP_BUFF_MAX_SIZE, MSG_ZEROCOPY, (struct sockaddr *)&m_client, sizeof(m_client));
     }
+}
+
+inline size_t udp_receive(unsigned char *b)
+{
+
+    size_t rcvlen = recv(m_sock, b, UDP_BUFF_MAX_BBFRAME, MSG_ZEROCOPY);
+    return rcvlen;
 }
 
 void udp_init(void)
@@ -458,9 +498,10 @@ void InitTxChannel(size_t LatencyMicro)
         // BufferLentx=3072/4+1; //3072 for fec 1/4_short
 
         // BufferLentx = (1 + (58192) / 8) * 16; // MAX BBFRAME LENGTH*4
-        BufferLentx = ((58192 / 4) + 1) * 10; // MAX BBFRAME LENGTH aligned 8
+        //BufferLentx = ((58192 / 4) + 1) * 16; // MAX BBFRAME LENGTH aligned 8
+        BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
         // BufferLentx = ((5380/4 + 1) ) ; // MAX BBFRAME LENGTH aligned 8
-        InitTxChannel(BufferLentx, 2);
+        InitTxChannel(BufferLentx, 8);
 
         fprintf(stderr, "ENd init\n");
     }
@@ -781,9 +822,43 @@ unsigned char m_ModCode = 0;
 unsigned int m_BBFrameLenBit = 0;
 unsigned char m_CodeRate = 0xFF; // OxFF means not initialized
 unsigned char m_CodeConstel = 0; // QPSK
-unsigned char m_CodeFrame=longframe;
+unsigned char m_CodeFrame = longframe;
 ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len, bool reset);
 ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len, bool reset);
+
+#define CRC_POLY 0xAB
+// Reversed
+#define CRC_POLYR 0xD5
+uint8_t m_crc_tab[256];
+void build_crc8_table(void)
+{
+    int r, crc;
+
+    for (int i = 0; i < 256; i++)
+    {
+        r = i;
+        crc = 0;
+        for (int j = 7; j >= 0; j--)
+        {
+            if ((r & (1 << j) ? 1 : 0) ^ ((crc & 0x80) ? 1 : 0))
+                crc = (crc << 1) ^ CRC_POLYR;
+            else
+                crc <<= 1;
+        }
+        m_crc_tab[i] = crc;
+    }
+}
+
+uint8_t calc_crc8(uint8_t *b, int len)
+{
+    uint8_t crc = 0;
+
+    for (int i = 0; i < len; i++)
+    {
+        crc = m_crc_tab[b[i] ^ crc];
+    }
+    return crc;
+}
 
 void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
 {
@@ -800,27 +875,28 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
     if (NewModCode != OldModCode)
     {
 
-        write_byte_from_buffer_burst(NULL, 0, true);
+        //write_byte_from_buffer_burst(NULL, 0, true);
         // write_byte_from_buffer_split(NULL, 0, true); // Done prior because m_code is still used
-        if( BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate]==0)
+        if (BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate] == 0)
         {
-            fprintf(stderr,"Coderate illegal\n");
+            fprintf(stderr, "Coderate illegal\n");
             return;
-        } 
+        }
         m_BBFrameLenBit = BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate];
-        
+        /*
         if ((m_BBFrameLenBit / 8 + 4) % 8 != 0)
         {
-            fprintf(stderr, "Wokaround , Lost BBFrame Sync %d\n", (m_BBFrameLenBit / 8 + 4) % 8);
+            fprintf(stderr, "CodeRate %d -> Wokaround , Lost BBFrame Sync %d\n",CodeRate, (m_BBFrameLenBit / 8 + 4) % 8);
             ResetDVBS2();
         }
+        */
         m_ModCode = NewModCode;
         OldModCode = m_ModCode;
-        fprintf(stderr, "Modcode = %x Len (bit) = %d Len (Byte) = %d \n", m_ModCode, m_BBFrameLenBit, m_BBFrameLenBit / 8);
+        fprintf(stderr, "Modcode = %x Coderate %d Len (bit) = %d Len (Byte) = %d \n", m_ModCode, CodeRate, m_BBFrameLenBit, m_BBFrameLenBit / 8);
 
         {
             int status = dvbs2neon_control(STREAM0, CONTROL_SET_OUTPUT_BUFFER, (uint32)BBFrameNeonBuff, 0); // CONTROL_SET_OUTPUT_BUFFER
-            fprintf(stderr, "Status %d \n", status);
+            // fprintf(stderr, "Status %d \n", status);
         }
 
         switch (Constellation)
@@ -849,7 +925,7 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
         // fprintf(stderr, "Trying to set dvbs2neon \n");
         int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
         modulator_mapping(fmt.constellation, CodeRate);
-        fprintf(stderr, "Status dvbs2neon_control %d \n", status);
+        // fprintf(stderr, "Status dvbs2neon_control %d \n", status);
     }
 }
 
@@ -950,6 +1026,46 @@ ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len, bool reset)
     return sent;
 }
 
+ssize_t write_byte_from_buffer_burstpatch(unsigned char *Buffer, int len, bool reset)
+{
+    if(reset==1) return 0;  
+    
+    unsigned int LazyLut[]={7,6,5,4,3,2,1,0};
+    unsigned int IdxStart=LazyLut[(len+4)%8];
+    
+    unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
+    //unsigned char *buffpluto = (unsigned char *)iio_buffer_first(m_txbuf, m_tx0_i);
+    //unsigned int IdxStart=(len%4+3)%4;
+    
+    //fprintf(stderr,"BBLen %d IdexStart %d len+4+IdxStart+1 %d (len+IdxStart+1+4)mod8 %d\n",len,IdxStart,(len+IdxStart+1+4),(len+4+IdxStart+1)%8);
+    ssize_t sent=0;
+    // Normal behavior
+    
+    
+    memset(buffpluto,0,4); //Idx = len -1
+    buffpluto[0] = m_ModCode;
+    memcpy(buffpluto + 4, Buffer, len);
+    
+
+        if((len+4+IdxStart+1)%8!=0)
+            fprintf(stderr,"len %d is not mod 8\n",len+4+IdxStart+1);
+
+        sent = iio_buffer_push_partial(m_txbuf, (len+4+IdxStart+1)/4);
+
+       
+        uint32_t val = 0;
+        int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
+        if (val & 1)
+        {
+            fprintf(stderr, "@");
+            fflush(stderr);
+            iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
+        }
+   
+    
+    return sent;
+}
+
 ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len, bool reset)
 {
     static unsigned char BufferLeft[8];
@@ -1018,14 +1134,19 @@ ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len, bool reset)
 ssize_t WriteTestBBFrame()
 {
     static unsigned char *TestBBFrame = (unsigned char *)malloc(58192 * 8 / 8);
-    static unsigned char GSEHeader[] = {0x70, 0x00, 0x00, 0x00, 0x96, 0xd0, 0xee, 0xcc, 0xcc, 0xe7}; // FEC 3/5
+    static unsigned char GSEHeader[] = {0x40, 0x01, 0x00, 0x00, 0x96, 0xd0, 0xee, 0xcc, 0xcc, 0xe7}; // FEC 3/5
     int headerlen = sizeof(GSEHeader);
-
+    memcpy(TestBBFrame, GSEHeader, headerlen);
     for (size_t i = headerlen; i < m_BBFrameLenBit / 8; i++)
     {
         TestBBFrame[i] = i % 256;
     }
-    return write_byte_from_buffer_burst(TestBBFrame, m_BBFrameLenBit / 8, false);
+
+    TestBBFrame[0] = (TestBBFrame[0] & 0xCF) | (0x3 << 4); // Single /ACM -> MultiSTream have to be studied : not well received ACM also
+    TestBBFrame[1] = 0;                                    // STream 1
+    TestBBFrame[9] = calc_crc8(TestBBFrame, 9);
+    
+    return write_byte_from_buffer_burstpatch(TestBBFrame, m_BBFrameLenBit / 8, false);
     // return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
 }
 
@@ -1039,7 +1160,7 @@ ssize_t WriteReadBBFrame()
         fread(TestBBFrame, 1, m_BBFrameLenBit / 8, fdin);
         fprintf(stderr, "Wrap\n");
     }
-    return write_byte_from_buffer_burst(TestBBFrame, m_BBFrameLenBit / 8, false);
+    return write_byte_from_buffer_burstpatch(TestBBFrame, m_BBFrameLenBit / 8, false);
     // return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
 }
 
@@ -1057,7 +1178,7 @@ ssize_t WriteTestTS(bool fpga)
         bbframeptr = (unsigned char *)dvbs2neon_packet(0, (uint32)(NullPacket), 0);
         packet++;
     }
-    // fprintf(stderr, " Get symbols after %d packets \n",packet);
+     //fprintf(stderr, " Get symbols after %d packets \n",packet);
     if (fpga)
     {
         bbframeptr = (unsigned char *)dvbs2neon_control(STREAM0, CONTROL_GET_LAST_BBFRAME, (uint32)BBFrameNeonBuff, 0);
@@ -1072,7 +1193,13 @@ ssize_t WriteTestTS(bool fpga)
         // fprintf(stderr, " Get BBframe of len %d/%d outputformat %d fec %d frametype %d \n",  ByteCount, m_BBFrameLenBit / 8, output_format, fec, frame_type);
         if (ByteCount != m_BBFrameLenBit / 8)
             fprintf(stderr, "BBFrame len mismatch fpga %d dvbneon %d\n", ByteCount, m_BBFrameLenBit / 8);
-        return write_byte_from_buffer_burst(bbframeptr, ByteCount, false);
+            /*
+        bbframeptr[0] = (bbframeptr[0] & 0xCF) | (0x3 << 4); // Single /CCM
+        bbframeptr[1] = 0;                                   // STream 0
+        bbframeptr[9] = calc_crc8(bbframeptr, 9);
+        */
+        // fprintf(stderr,"CRC %x/%x \n",calc_crc8(bbframeptr,9),bbframeptr[9]);
+        return write_byte_from_buffer_burstpatch(bbframeptr, ByteCount, false);
     }
     else
     {
@@ -1103,7 +1230,7 @@ void *tx_buffer_thread(void *arg)
     remove("/dev/tx1");
     mkfifo("/dev/tx1", 0666);
     // fdin = fopen("/dev/tx1", "rb");
-    fdin = fopen("test14_2.bb", "rb");
+    // fdin = fopen("test14_2.bb", "rb");
     if (fdin == NULL)
         fprintf(stderr, "Tx Pipe error\n");
 #endif
@@ -1128,6 +1255,7 @@ void *tx_buffer_thread(void *arg)
 
     SetFPGAMode(m_fpga);
     ResetDVBS2();
+   // SetDVBS2Constellation();
     while (true)
     {
 
@@ -1149,9 +1277,15 @@ void *tx_buffer_thread(void *arg)
                 {
                     // SetModCode(longframe, mod_qpsk, m_CodeRate);
                     SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate);
+                    //    written = WriteTestBBFrame();
+                    //for (int i = 0; i < 8; i++)
+                    //    written = WriteTestBBFrame();
                     // written = WriteTestBBFrame();
-                    // m_CodeRate=0xFF;//Once
-                    written = WriteTestTS(m_fpga);
+                    //  m_CodeRate=0xFF;//Once
+                     //for(int i=0;i<8;i++)
+                         written = WriteTestTS(m_fpga);
+                    // SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate+1);
+                    // written = WriteTestTS(m_fpga);
                     // written= WriteReadBBFrame();
                 }
 
@@ -1177,400 +1311,412 @@ void *tx_buffer_thread(void *arg)
             }
             case output_udp:
             {
+                static unsigned char udpbbframe[UDP_BUFF_MAX_BBFRAME];
+                size_t udplen = udp_receive(udpbbframe);
+                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate);
+                if (udplen == m_BBFrameLenBit / 8)
+                        write_byte_from_buffer_burst(udpbbframe, udplen, false);
+                else
+                     fprintf(stderr, "udp/bbframelen %d/%d mismatch\n", udplen, m_BBFrameLenBit / 8);
                 break;
             }
             }
 
-            pthread_mutex_unlock(&buffer_mutextx);
+                pthread_mutex_unlock(&buffer_mutextx);
+            }
+            else
+            {
+                usleep(m_latency);
+            }
         }
-        else
-        {
-            usleep(m_latency);
-        }
+
+        return NULL;
     }
 
-    return NULL;
-}
-
-bool publish(char *mqttkey, float value)
-{
-    char svalue[255];
-    sprintf(svalue, "%.0f", value);
-    char pubkey[255];
-    sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-    // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
-    mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
-    return true;
-}
-
-bool publish(char *mqttkey, char *svalue)
-{
-    char pubkey[255];
-    sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-    // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
-    mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
-    return true;
-}
-
-bool publishstatus(char *iio_key, char *mqttkey)
-{
-    FILE *fdread = NULL;
-    fdread = fopen(iio_key, "r");
-    char svalue[255];
-    // fgets(svalue,255,fdread);
-    fscanf(fdread, "%s", svalue); // To avoid getting units
-    fclose(fdread);
-    fprintf(stderr, "%s %s\n", iio_key, svalue);
-    char pubkey[255];
-    sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-
-    mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
-    return true;
-}
-
-bool SendCommand(char *skey, char *svalue)
-{
-    if (strcmp(svalue, "?") == 0)
-        return true; // This is a request status
-
-    FILE *fdwrite = NULL;
-    fdwrite = fopen(skey, "w");
-    if (fdwrite == NULL)
-        return false;
-    if (svalue[strlen(svalue) - 1] == 'M')
+    bool publish(char *mqttkey, float value)
     {
-        svalue[strlen(svalue) - 1] = 0;
-        float value = atof(svalue) * 1e6;
+        char svalue[255];
         sprintf(svalue, "%.0f", value);
+        char pubkey[255];
+        sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
+        // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
+        mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
+        return true;
     }
-    if (svalue[strlen(svalue) - 1] == 'K')
+
+    bool publish(char *mqttkey, char *svalue)
     {
-        svalue[strlen(svalue) - 1] = 0;
-        float value = atof(svalue) * 1e3;
-        sprintf(svalue, "%.0f", value);
+        char pubkey[255];
+        sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
+        // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
+        mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
+        return true;
     }
 
-    fprintf(fdwrite, "%s", svalue);
-    fclose(fdwrite);
-    return true;
-}
-
-char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
-                      "rx/stream/average", "tx/stream/run" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
-                      "tx/dvbs2/coderate", "tx/dvbs2/constel", "tx/dvbs2/frame",""};
-enum defidx
-{
-    listcmd,
-    cmd_rxstreamrun,
-    cmd_rxstreamudpadd,
-    cmd_rxstreamoutputtype,
-    cmd_rxstreamburst,
-    cmd_rxstreamaverage,
-    cmd_txstreamrun,
-    cmd_txdvbs2coderate,
-    cmd_txdvbs2constellation,
-    cmd_txdvbs2frame
-
-};
-
-bool publishcmd()
-{
-    char svalue[2500];
-    sprintf(svalue, "");
-    for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
+    bool publishstatus(char *iio_key, char *mqttkey)
     {
-        strcat(svalue, strcmd[i]);
-        strcat(svalue, ",");
+        FILE *fdread = NULL;
+        fdread = fopen(iio_key, "r");
+        char svalue[255];
+        // fgets(svalue,255,fdread);
+        fscanf(fdread, "%s", svalue); // To avoid getting units
+        fclose(fdread);
+        fprintf(stderr, "%s %s\n", iio_key, svalue);
+        char pubkey[255];
+        sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
+
+        mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
+        return true;
     }
-    publish("listcmd_stream", (char *)svalue);
-    // mosquitto_publish(m_mosq, NULL, "listcmd", strlen(svalue), svalue, 2, false);
-    return true;
-}
 
-void PubTelemetry()
-{
-    char svalue[2500];
-    sprintf(svalue, "");
-    for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
-    {
-        HandleCommand(strcmd[i], "?");
-    }
-    publish("rx/stream/underflow", (float)Underflow);
-}
-
-bool HandleCommand(char *key, char *svalue)
-{
-
-    int cmdidx = -1;
-    for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
-    {
-        if (strcmp(strcmd[i], key) == 0)
-        {
-
-            cmdidx = i;
-            break;
-        }
-    }
-    if (cmdidx == -1)
-        return false;
-
-    switch (cmdidx)
-    {
-    case listcmd:
-    {
-        publishcmd();
-        break;
-    }
-    case cmd_rxstreamrun:
+    bool SendCommand(char *skey, char *svalue)
     {
         if (strcmp(svalue, "?") == 0)
+            return true; // This is a request status
+
+        FILE *fdwrite = NULL;
+        fdwrite = fopen(skey, "w");
+        if (fdwrite == NULL)
+            return false;
+        if (svalue[strlen(svalue) - 1] == 'M')
         {
+            svalue[strlen(svalue) - 1] = 0;
+            float value = atof(svalue) * 1e6;
+            sprintf(svalue, "%.0f", value);
+        }
+        if (svalue[strlen(svalue) - 1] == 'K')
+        {
+            svalue[strlen(svalue) - 1] = 0;
+            float value = atof(svalue) * 1e3;
+            sprintf(svalue, "%.0f", value);
+        }
+
+        fprintf(fdwrite, "%s", svalue);
+        fclose(fdwrite);
+        return true;
+    }
+
+    char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
+                          "rx/stream/average", "tx/stream/run" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
+                          "tx/dvbs2/coderate", "tx/dvbs2/constel", "tx/dvbs2/frame", ""};
+    enum defidx
+    {
+        listcmd,
+        cmd_rxstreamrun,
+        cmd_rxstreamudpadd,
+        cmd_rxstreamoutputtype,
+        cmd_rxstreamburst,
+        cmd_rxstreamaverage,
+        cmd_txstreamrun,
+        cmd_txdvbs2coderate,
+        cmd_txdvbs2constellation,
+        cmd_txdvbs2frame
+
+    };
+
+    bool publishcmd()
+    {
+        char svalue[2500];
+        sprintf(svalue, "");
+        for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
+        {
+            strcat(svalue, strcmd[i]);
+            strcat(svalue, ",");
+        }
+        publish("listcmd_stream", (char *)svalue);
+        // mosquitto_publish(m_mosq, NULL, "listcmd", strlen(svalue), svalue, 2, false);
+        return true;
+    }
+
+    void PubTelemetry()
+    {
+        char svalue[2500];
+        sprintf(svalue, "");
+        for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
+        {
+            HandleCommand(strcmd[i], "?");
+        }
+        publish("rx/stream/underflow", (float)Underflow);
+    }
+
+    bool HandleCommand(char *key, char *svalue)
+    {
+
+        int cmdidx = -1;
+        for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
+        {
+            if (strcmp(strcmd[i], key) == 0)
+            {
+
+                cmdidx = i;
+                break;
+            }
+        }
+        if (cmdidx == -1)
+            return false;
+
+        switch (cmdidx)
+        {
+        case listcmd:
+        {
+            publishcmd();
+            break;
+        }
+        case cmd_rxstreamrun:
+        {
+            if (strcmp(svalue, "?") == 0)
+            {
+                if (RunRx)
+                    publish("rx/stream/run", "1");
+                else
+                    publish("rx/stream/run", "0");
+                break;
+            }
+            if (strcmp(svalue, "0") == 0)
+            {
+                RunRx = false;
+            }
+            else
+            {
+                RunRx = true;
+            }
             if (RunRx)
                 publish("rx/stream/run", "1");
             else
                 publish("rx/stream/run", "0");
             break;
         }
-        if (strcmp(svalue, "0") == 0)
+        case cmd_rxstreamudpadd:
         {
-            RunRx = false;
-        }
-        else
-        {
-            RunRx = true;
-        }
-        if (RunRx)
-            publish("rx/stream/run", "1");
-        else
-            publish("rx/stream/run", "0");
-        break;
-    }
-    case cmd_rxstreamudpadd:
-    {
-        if (strcmp(svalue, "?") == 0)
-        {
+            if (strcmp(svalue, "?") == 0)
+            {
 
+                publish("rx/stream/udp_addr_port", m_addport);
+                break;
+            }
+            udp_set_ip(svalue, m_iface);
             publish("rx/stream/udp_addr_port", m_addport);
             break;
         }
-        udp_set_ip(svalue, m_iface);
-        publish("rx/stream/udp_addr_port", m_addport);
-        break;
-    }
-    case cmd_rxstreamoutputtype:
-    {
-        if (strcmp(svalue, "?") == 0)
+        case cmd_rxstreamoutputtype:
         {
+            if (strcmp(svalue, "?") == 0)
+            {
 
+                publish("rx/stream/output_type", (float)typeouput);
+                break;
+            }
+            typeouput = atoi(svalue);
             publish("rx/stream/output_type", (float)typeouput);
             break;
         }
-        typeouput = atoi(svalue);
-        publish("rx/stream/output_type", (float)typeouput);
-        break;
-    }
-    case cmd_rxstreamburst:
-    {
-        if (strcmp(svalue, "?") == 0)
+        case cmd_rxstreamburst:
         {
+            if (strcmp(svalue, "?") == 0)
+            {
 
+                publish("rx/stream/burst", (float)burstsizerx);
+                break;
+            }
+            burstsizerx = atoi(svalue);
             publish("rx/stream/burst", (float)burstsizerx);
             break;
         }
-        burstsizerx = atoi(svalue);
-        publish("rx/stream/burst", (float)burstsizerx);
-        break;
-    }
-    case cmd_rxstreamaverage:
-    {
-        if (strcmp(svalue, "?") == 0)
+        case cmd_rxstreamaverage:
         {
+            if (strcmp(svalue, "?") == 0)
+            {
 
+                publish("rx/stream/average", (float)burstsizerx);
+                break;
+            }
+            average = atoi(svalue);
             publish("rx/stream/average", (float)burstsizerx);
             break;
         }
-        average = atoi(svalue);
-        publish("rx/stream/average", (float)burstsizerx);
-        break;
-    }
-    case cmd_txstreamrun:
-    {
-        if (strcmp(svalue, "?") == 0)
+        case cmd_txstreamrun:
         {
+            if (strcmp(svalue, "?") == 0)
+            {
+                if (RunTx)
+                    publish("tx/stream/run", "1");
+                else
+                    publish("tx/stream/run", "0");
+                break;
+            }
+            if (strcmp(svalue, "0") == 0)
+            {
+                RunTx = false;
+            }
+            else
+            {
+                RunTx = true;
+            }
             if (RunTx)
                 publish("tx/stream/run", "1");
             else
                 publish("tx/stream/run", "0");
             break;
         }
-        if (strcmp(svalue, "0") == 0)
+        case cmd_txdvbs2coderate:
         {
-            RunTx = false;
-        }
-        else
-        {
-            RunTx = true;
-        }
-        if (RunTx)
-            publish("tx/stream/run", "1");
-        else
-            publish("tx/stream/run", "0");
-        break;
-    }
-    case cmd_txdvbs2coderate:
-    {
-        if (strcmp(svalue, "?") == 0)
-        {
+            if (strcmp(svalue, "?") == 0)
+            {
+                publish("tx/dvbs2/coderate", m_CodeRate);
+                break;
+            }
+            m_CodeRate = atoi(svalue);
             publish("tx/dvbs2/coderate", m_CodeRate);
             break;
         }
-        m_CodeRate = atoi(svalue);
-        publish("tx/dvbs2/coderate", m_CodeRate);
-        break;
-    }
-    case cmd_txdvbs2constellation:
-    {
-        if (strcmp(svalue, "?") == 0)
+        case cmd_txdvbs2constellation:
         {
-            switch (m_CodeConstel)
+            if (strcmp(svalue, "?") == 0)
             {
-            case mod_qpsk:
-                publish("tx/dvbs2/constel", "qpsk");
-                break;
-            case mod_8psk:
-                publish("tx/dvbs2/constel", "8psk");
-                break;
-            case mod_16apsk:
-                publish("tx/dvbs2/constel", "16apsk");
-                break;
-            case mod_32apsk:
-                publish("tx/dvbs2/constel", "32apsk");
+                switch (m_CodeConstel)
+                {
+                case mod_qpsk:
+                    publish("tx/dvbs2/constel", "qpsk");
+                    break;
+                case mod_8psk:
+                    publish("tx/dvbs2/constel", "8psk");
+                    break;
+                case mod_16apsk:
+                    publish("tx/dvbs2/constel", "16apsk");
+                    break;
+                case mod_32apsk:
+                    publish("tx/dvbs2/constel", "32apsk");
+                    break;
+                }
+
                 break;
             }
-
+            if (strcmp(svalue, "qpsk") == 0)
+                m_CodeConstel = mod_qpsk;
+            if (strcmp(svalue, "8psk") == 0)
+                m_CodeConstel = mod_8psk;
+            if (strcmp(svalue, "16apsk") == 0)
+                m_CodeConstel = mod_16apsk;
+            if (strcmp(svalue, "32apsk") == 0)
+                m_CodeConstel = mod_32apsk;
+            publish("tx/dvbs2/constel", svalue);
             break;
         }
-        if (strcmp(svalue, "qpsk") == 0)
-            m_CodeConstel = mod_qpsk;
-        if (strcmp(svalue, "8psk") == 0)
-            m_CodeConstel = mod_8psk;
-        if (strcmp(svalue, "16apsk") == 0)
-            m_CodeConstel = mod_16apsk;
-        if (strcmp(svalue, "32apsk") == 0)
-            m_CodeConstel = mod_32apsk;
-        publish("tx/dvbs2/constel", svalue);
-        break;
-    }
-    case cmd_txdvbs2frame:
-    {
-        if (strcmp(svalue, "?") == 0)
+        case cmd_txdvbs2frame:
         {
-            switch (m_CodeFrame)
+            if (strcmp(svalue, "?") == 0)
             {
-            case shortframe:
-                publish("tx/dvbs2/frame", "short");
-                break;
-            case longframe:
-                publish("tx/dvbs2/frame", "long");
+           
+                switch (m_CodeFrame)
+                {
+                case shortframe:
+                    publish("tx/dvbs2/frame", "short");
+                    break;
+                case longframe:
+                    publish("tx/dvbs2/frame", "long");
+                    break;
+                }
                 break;
             }
+            if (strcmp(svalue, "short") == 0)
+                m_CodeFrame = shortframe;
+            if (strcmp(svalue, "long") == 0)
+                m_CodeFrame = longframe;
+           
+            publish("tx/dvbs2/frame", svalue);
+            
             break;
         }
-        if (strcmp(svalue, "short") == 0)
-            m_CodeFrame = shortframe;
-        if (strcmp(svalue, "long") == 0)
-            m_CodeFrame = longframe;
-        publish("tx/dvbs2/frame", svalue);    
+        }
+        return true;
     }
-    }
-    return true;
-}
 
-bool HandleStatus(char *key, char *svalue)
-{
-    // fprintf(stderr,"Handle status %s\n",key);
-    if (strcmp(key, "rx/finalsr") == 0)
+    bool HandleStatus(char *key, char *svalue)
     {
-        if (atol(svalue) != m_SR)
+        // fprintf(stderr,"Handle status %s\n",key);
+        if (strcmp(key, "rx/finalsr") == 0)
         {
-            m_SR = atol(svalue);
-            fprintf(stderr, "New sr %d\n", m_SR);
-
-            if (RunRx)
+            if (atol(svalue) != m_SR)
             {
+                m_SR = atol(svalue);
+                fprintf(stderr, "New sr %d\n", m_SR);
+
+                if (RunRx)
+                {
+                    RunRx = false; // Dirty trick to let some time to get mutex
+                    InitRxChannel(m_latency);
+                    RunRx = true;
+                }
+                else
+                    InitRxChannel(m_latency);
+            }
+        }
+        if (strcmp(key, "rx/format") == 0)
+        {
+            if (atoi(svalue) != m_format)
+            {
+                m_format = atoi(svalue);
+                fprintf(stderr, "New format %d\n", m_format);
                 RunRx = false; // Dirty trick to let some time to get mutex
                 InitRxChannel(m_latency);
                 RunRx = true;
             }
-            else
-                InitRxChannel(m_latency);
         }
-    }
-    if (strcmp(key, "rx/format") == 0)
-    {
-        if (atoi(svalue) != m_format)
+        /*
+        if (strcmp(key, "tx/finalsr") == 0)
         {
-            m_format = atoi(svalue);
-            fprintf(stderr, "New format %d\n", m_format);
-            RunRx = false; // Dirty trick to let some time to get mutex
-            InitRxChannel(m_latency);
-            RunRx = true;
-        }
-    }
-    /*
-    if (strcmp(key, "tx/finalsr") == 0)
-    {
-        if (atol(svalue) != m_SRtx)
-        {
-            m_SRtx = atol(svalue);
-            fprintf(stderr, "New sr %d\n", m_SRtx);
-
-            if (RunTx)
+            if (atol(svalue) != m_SRtx)
             {
-                RunTx = false; // Dirty trick to let some time to get mutex
-                InitTxChannel(m_latencytx);
-                RunTx = true;
+                m_SRtx = atol(svalue);
+                fprintf(stderr, "New sr %d\n", m_SRtx);
+
+                if (RunTx)
+                {
+                    RunTx = false; // Dirty trick to let some time to get mutex
+                    InitTxChannel(m_latencytx);
+                    RunTx = true;
+                }
+                else
+                    InitTxChannel(m_latencytx);
             }
-            else
-                InitTxChannel(m_latencytx);
+        }*/
+        return true;
+    }
+
+    void HandleCommandInit(struct mosquitto * mosq, char *sSerial)
+    {
+        m_mosq = mosq;
+
+        sprintf(sDtRoot, "dt/pluto/%s/", sSerial);
+        fprintf(stderr, "Before thread \n");
+        build_crc8_table();
+
+        udp_init();
+        strcpy(m_iface, "127.0.0.1");
+        udp_set_ip("230.0.0.1:1234", m_iface);
+        /*
+        remove("/dev/rx1");
+        mkfifo("/dev/rx1", 0666);
+        fdout = fopen("/dev/rx1", "wb");
+        InitRxChannel(20000);
+        */
+        typeouput = output_stdout;
+/*
+        if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
+        {
+            fprintf(stderr, "Rx thread cannot be started\n");
         }
-    }*/
-    return true;
-}
-
-void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
-{
-    m_mosq = mosq;
-
-    sprintf(sDtRoot, "dt/pluto/%s/", sSerial);
-    fprintf(stderr, "Before thread \n");
-
-    /*
-    udp_init();
-    strcpy(m_iface, "127.0.0.1");
-    udp_set_ip("230.0.0.1:10000", m_iface);
-    remove("/dev/rx1");
-    mkfifo("/dev/rx1", 0666);
-    fdout = fopen("/dev/rx1", "wb");
-    InitRxChannel(20000);
-    */
-    // typeouput=output_udp;
-
-    if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
-    {
-        fprintf(stderr, "Rx thread cannot be started\n");
+        else
+        {
+            fprintf(stderr, "Rx thread Started\n");
+        }
+*/
+        if (pthread_create(&(m_tidtx[0]), NULL, &tx_buffer_thread, NULL) != 0)
+        {
+            fprintf(stderr, "Tx thread cannot be started\n");
+        }
+        else
+        {
+            fprintf(stderr, "Tx thread Started\n");
+        }
     }
-    else
-    {
-        fprintf(stderr, "Rx thread Started\n");
-    }
-
-    if (pthread_create(&(m_tidtx[0]), NULL, &tx_buffer_thread, NULL) != 0)
-    {
-        fprintf(stderr, "Tx thread cannot be started\n");
-    }
-    else
-    {
-        fprintf(stderr, "Tx thread Started\n");
-    }
-}
