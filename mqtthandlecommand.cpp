@@ -42,12 +42,14 @@
 #include "mqtthandlecommand.h"
 #include "iiofshelper.h"
 #include <math.h>
+#include "nco_conf.h" // Oscimp nco
 
 char sCmdRoot[255];
 char sDtRoot[255];
 struct mosquitto *m_mosq;
 size_t m_finalrxsr = 0;
 size_t m_finaltxsr = 0;
+size_t m_adcdacsr = 0;
 
 enum
 {
@@ -91,6 +93,14 @@ bool publishstatus(char *iio_key, char *mqttkey)
 
     mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
     return true;
+}
+
+void GetKey(char *iio_key,char *svalue)
+{
+    FILE *fdread = NULL;
+    fdread = fopen(iio_key, "r");
+    fscanf(fdread, "%s", svalue); // To avoid getting units
+    fclose(fdread);
 }
 
 bool SendCommand(char *skey, char *svalue)
@@ -261,7 +271,7 @@ void setad9363filter(int ratio, int hardupsample, float rolloff, int type, float
     }
     break;
     }
-    float gain = 1.0;//log2(2 * hardupsample) * digitalgain;
+    float gain = digitalgain;//log2(2 * hardupsample) * digitalgain;
     
     fir[NbTaps] = 0.0;
     if(tx)
@@ -430,6 +440,7 @@ bool ComputeRxSR(char *svalue)
     ADCSR = RequestSR * fpgadecim * ad9363decim;
     char sSR[255];
     sprintf(sSR, "%.0f", ADCSR);
+    m_adcdacsr=RequestSR * fpgadecim;
     // First set result SR
     SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
     SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); //RX Fpga
@@ -574,7 +585,14 @@ bool ComputeTxSR(char *svalue)
     DACSR = RequestSR * fpgainterpol * ad9363interpol;
     char sSR[255];
     sprintf(sSR, "%.0f", DACSR);
+     m_adcdacsr=RequestSR * fpgainterpol;
     // First set result SR
+    
+    char sMute[10];
+    GetKey("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", sMute);
+    // Mute if we are using interpol
+    if(fpgainterpol * ad9363interpol>1) 
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "1");    
     SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
     SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); //TX Fpga
      SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); //RX Fpga
@@ -582,7 +600,8 @@ bool ComputeTxSR(char *svalue)
     // AD9363Interpol
     if (ad9363interpol > 1.0)
     {
-        setad9363filter(1, ad9363interpol,0.7, typelpf, 1.0, true,true,true);
+        // Work for DVBS2 mode ! Fixme to see with general IQ
+        setad9363filter(1, ad9363interpol,2.0/((float)ad9363interpol), typelpf, 3.0, true,true,true);
         //setad9363filter(1, ad9363interpol, 0.7, typerrc, 1.0, false,true,true);
         setad9363filter(1, ad9363interpol,1, typelpf, 1.0, false,true,false); // WE need also to do it on RX
 
@@ -626,7 +645,9 @@ bool ComputeTxSR(char *svalue)
     else
         SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", "200000"); //Mini bandwidth
     m_finaltxsr = RequestSR;
-
+    // Unmute if we are not muted before
+    if(atoi(sMute)==0)
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown","0");    
     publish("tx/finalsr", m_finaltxsr);
     publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
     publishstatus("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", "tx/sr");
@@ -669,7 +690,7 @@ size_t SetFormat(size_t requestformat)
 }
 
 char strcmd[][255] = {"listcmd", "rx/frequency", "rx/modegain", "rx/gain", "rx/sr", "rx/format","rx/mute",
- "tx/frequency", "tx/gain", "tx/sr","tx/format","tx/mute",""};
+ "tx/frequency", "tx/gain", "tx/sr","tx/format","tx/mute","tx/nco",""};
 enum defidx
 {
     listcmd,
@@ -683,7 +704,8 @@ enum defidx
     cmd_txgain,
     cmd_txsr,
     cmd_txformat,
-    cmd_txmute
+    cmd_txmute,
+     cmd_txnco
 };
 
 bool publishcmd()
@@ -854,6 +876,22 @@ bool HandleCommand(char *key, char *soriginvalue)
         publishstatus("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", key);
         break;
     }
+    case cmd_txnco:
+    {
+        #define NCO_ACCUM_SIZE 28
+        static float m_nco=0;
+        if (strcmp(svalue, "?") != 0)
+        {
+            m_nco=atof(svalue);
+            fprintf(stderr,"adcdacsr %d\n",m_adcdacsr);
+            //Fixme! NCO is before ad9361 iterpolator : so could be outside of band
+            nco_counter_send_conf("/dev/nco00", m_adcdacsr, m_nco>=0?m_nco:m_adcdacsr+m_nco,
+			      NCO_ACCUM_SIZE, 0, 1, 1); // 0, 1, 1 => offset, PINC HW/SF, POFF HW/SF;
+        } 
+        publish("tx/nco", m_nco);   
+        
+        break;
+    }
     }
 
     return true;
@@ -863,4 +901,6 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
 {
     m_mosq = mosq;
     sprintf(sDtRoot, "dt/pluto/%s/", sSerial);
+    SendCommand("/sys/bus/iio/devices/iio:device0/calib_mode","manual_tx_quad");
+    //iio_device_attr_write(dev, "calib_mode", "manual_tx_quad");
 }
