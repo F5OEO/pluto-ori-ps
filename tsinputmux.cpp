@@ -25,6 +25,17 @@ using namespace std;
 #define WITH_NEON
 //#define UDP_BUFF_MAX_BBFRAME (58192 / 8)
 #define UDP_BUFF_MAX_BBFRAME 8000
+
+
+
+extern int m_Fecmode;
+enum 
+{
+    fec_fix,
+    fec_variable
+};
+
+
 typedef struct
 {
     ssize_t size;
@@ -34,7 +45,7 @@ typedef struct
 
 extern queue<buffer_t *> m_bbframe_queue;
 extern pthread_mutex_t buffer_mutextx;
-
+extern int m_txmode;
 
 struct bbheader
 {
@@ -80,13 +91,21 @@ enum
 };
 int m_ModeCod = C2_3 + longframe;
 
-#define MAX_QUEUE_ITEM 10
+#define MAX_QUEUE_ITEM 20
 #define MAX_QUEUE_CHANGEMODCOD 2
 
+enum
+{
+    tx_passtrough,
+    tx_iq,
+    tx_dvbs2_ts,
+    tx_dvbs2_gse
+
+};
 
 bool addbbframe(uint8_t *bbframe, size_t len,size_t modcod)
 {
-    
+    if(m_txmode!=tx_dvbs2_ts) return false;
     pthread_mutex_lock(&buffer_mutextx);
     buffer_t *newbuf = (buffer_t *)malloc(sizeof(buffer_t));
     newbuf->size = len;
@@ -107,14 +126,14 @@ bool addbbframe(uint8_t *bbframe, size_t len,size_t modcod)
     */
     if ((m_bbframe_queue.size() >= MAX_QUEUE_ITEM))
     {
-        fprintf(stderr, "Queue is full ! Purging %d bbframe\n",m_bbframe_queue.size());
+        fprintf(stderr, "MUXTS : Queue is full ! Purging %d bbframe\n",m_bbframe_queue.size());
         //newbuf->modecod=m_ModeCod;
-        while (m_bbframe_queue.size()>0)
+        while (m_bbframe_queue.size()>1)
         {
             buffer_t *oldestbuf = m_bbframe_queue.front(); // Remove the oldest
-            fprintf(stderr,"before\n");
+            
             free(oldestbuf);
-            fprintf(stderr,"after\n");
+            
             m_bbframe_queue.pop();
         }    
     }
@@ -130,7 +149,7 @@ bool addbbframe(uint8_t *bbframe, size_t len,size_t modcod)
     return true;
 }
 
-inline size_t udp_receive(u_int16_t sock, unsigned char *b, unsigned int maxlen)
+size_t udp_receive(u_int16_t sock, unsigned char *b, unsigned int maxlen)
 {
 
     size_t rcvlen = recv(sock, b, maxlen, 0 /* MSG_ZEROCOPY*/);
@@ -229,14 +248,15 @@ uint8_t calc_crc8_r(uint8_t *b, int len)
 
 #define MAX_BBFRAME (58192 / 8)
 
-// unsigned int BBFrameLenLut[] = {3072, 5232, 6312, 7032, 9552, 10632, 11712, 12432, 13152, 14232, 0,              16008, 21408, 25728, 32208, 38688, 43040, 48408, 51648, 53840, 57472, 58192};
-extern unsigned int BBFrameLenLut[];
+unsigned int BBFrameLenLut2[] = {3072, 5232, 6312, 7032, 9552, 10632, 11712, 12432, 13152, 14232, 0,              16008, 21408, 25728, 32208, 38688, 43040, 48408, 51648, 53840, 57472, 58192};
+//extern unsigned int BBFrameLenLut[];
 
 u_int16_t recv_ts_sock;
 
 
 pthread_mutex_t buffer_mutexts;
 DVB2FrameFormat  tempmodecode;
+
 void addneonts(uint8_t *tspacket, size_t length)
 {
     unsigned char *bbframeptr = NULL;
@@ -250,7 +270,9 @@ void addneonts(uint8_t *tspacket, size_t length)
         if (bbframeptr != NULL)
         {
             static int count=0;
-            bbframeptr = (unsigned char *)dvbs2neon_control(STREAM0, CONTROL_GET_LAST_BBFRAME, (uint32)BBFrameNeonBuff, 0);
+            //bbframeptr = (unsigned char *)dvbs2neon_control(STREAM0, CONTROL_GET_LAST_BBFRAME, (uint32)BBFrameNeonBuff, 0);
+
+
 
             unsigned short *p16 = (unsigned short *)bbframeptr;
             unsigned short ByteCount = p16[-1];
@@ -259,10 +281,25 @@ void addneonts(uint8_t *tspacket, size_t length)
             uchar fec = p8[-5];
             uchar frame_type = p8[-7];
             //fprintf(stderr,"bbframe %d\n",ByteCount);
-          
+           int i=0;
+            for(i=0;i<sizeof(BBFrameLenLut2);i++)
+            {
+                  if(BBFrameLenLut2[i]/8==ByteCount)
+                    break;  
+            }
+            int curmodcod= (i>=11)? 0x2C+i-11:0+i;
+          addbbframe((uint8_t *)bbframeptr, ByteCount,curmodcod);
+
+            if(m_Fecmode==fec_variable)
+            {
+            tempmodecode=fmt;
+            tempmodecode.fec+=(m_bbframe_queue.size()-1)/2;
+            if(tempmodecode.fec<0) tempmodecode.fec=0;
+            if(tempmodecode.fec>10) tempmodecode.fec=10;
+            int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&tempmodecode, 0);  
+            }
+          /*
             addbbframe((uint8_t *)bbframeptr, ByteCount,m_ModeCod+(count+1)%2);
-            
-            
             
             tempmodecode.constellation=fmt.constellation;
             tempmodecode.fec=fmt.fec;
@@ -274,7 +311,7 @@ void addneonts(uint8_t *tspacket, size_t length)
             tempmodecode.fec+=count;
             int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&tempmodecode, 0);
             count=(count+1)%2;
-            
+            */
             //pthread_mutex_unlock(&buffer_mutexts);
         }
     }
@@ -284,7 +321,7 @@ void addneonts(uint8_t *tspacket, size_t length)
 void addts(uint8_t *tspacket, size_t length)
 {
     static unsigned char bbframe[MAX_BBFRAME];
-    uint16_t framebytes = BBFrameLenLut[m_ModeCod] / 8; // Need to set it by modcod
+    uint16_t framebytes = BBFrameLenLut2[m_ModeCod] / 8; // Need to set it by modcod
     static uint16_t avail = framebytes - 10;
     static uint8_t lastcrc = 0;
     struct bbheader *header = (struct bbheader *)bbframe;
@@ -326,6 +363,8 @@ void addts(uint8_t *tspacket, size_t length)
             header->syncd2 = (remain * 8) & 0xFF;       // SYNCD
             header->crc = calc_crc8_r(bbframe, 9);      // CRC
 
+           
+            
             // udp_send(send_bbframe_sock, send_bbframe_ip, bbframe, framebytes);
             addbbframe(bbframe, framebytes,m_ModeCod);
 
@@ -385,154 +424,7 @@ void addts(uint8_t *tspacket, size_t length)
     }
 }
 
-#ifdef OLD
-void *rx_ts_thread(void *arg)
-{
 
-    size_t read_length;
-    // char recv_ts_ip[] = "230.10.0.1:1234";
-    // recv_ts_sock = udp_init(recv_ts_ip, "192.168.1.39", 1);
-    unsigned char bbframe[MAX_BBFRAME];
-    unsigned char tspacket[7 * 188];
-
-    uint16_t remain = 0;
-    uint16_t framebytes = BBFrameLenLut[m_ModeCod] / 8; // Need to set it by modcod
-    uint16_t avail = framebytes - 10;
-    uint8_t lastcrc = 0;
-    struct bbheader *header = (struct bbheader *)bbframe;
-    fprintf(stderr, "Starting ts input \n");
-    unsigned char NullPacket[188] = {0x47, 0x1F, 0xFE, 0x10, 'F', '5', 'O', 'E', 'O'};
-    for (int i = 9; i < 188; i++)
-        NullPacket[i] = i;
-    int index = 10;
-
-    header->matype1 = 0xF0; // Generic continuous 0.35roff
-
-    header->matype2 = 0;                        // Input Stream Identifier
-    header->upl = htons(188 * 8);               // User Packet Length 188
-    header->dfl = htons((framebytes - 10) * 8); // Data Field Length
-    header->sync = 0x47;                        // SYNC - Copy of the user packet Sync byte
-    header->syncd1 = 0x00;                      // SYNCD
-    header->syncd2 = 0x00;                      // SYNCD
-    header->crc = calc_crc8_r(bbframe, 9);      // CRC
-
-    while (true)
-    {
-        int length = 0;
-
-        length = udp_receive(recv_ts_sock, tspacket, 7 * 188);
-
-        /*
-        for(int i=0;i<7;i++)
-        {
-            memcpy(tspacket+i*188,NullPacket,188);
-        }
-        length=7*188;
-          */
-        // fprintf(stderr,"avail %d index %d\n",avail,index);
-
-        if (length % 188 != 0)
-        {
-            fprintf(stderr, "ts not 188 aligned\n");
-        }
-        else
-        {
-            // fprintf(stderr, "Rx ts %d\n",length);
-        }
-        uint16_t tsindex = 0;
-        while (tsindex < length)
-        {
-            uint8_t crc = calc_crc8_r(tspacket + tsindex + 1, 187);
-            if (avail >= 188)
-            {
-
-                /*
-                bbframe[index++] = lastcrc;
-                lastcrc = crc;
-                avail--;*/
-                memcpy(bbframe + index, tspacket + tsindex + 1, 188 - 1);
-                tsindex += 188;
-                index += 187;
-                avail -= 187;
-                bbframe[index++] = crc;
-                avail--;
-            }
-            else if (avail == 0) // BBFrame is full
-            {
-                // sendudpbbframe
-                // fprintf(stderr,"Complete full\n");
-                if (remain == 0)
-                    remain = 187;
-                header->matype1 = 0xC0; // TS 0.35roff
-
-                header->matype2 = 0;                        // Input Stream Identifier
-                header->upl = htons(188 * 8);               // User Packet Length 188
-                header->dfl = htons((framebytes - 10) * 8); // Data Field Length
-                header->sync = 0x47;                        // SYNC - Copy of the user packet Sync byte
-                header->syncd1 = (remain * 8) >> 8;         // SYNCD
-                header->syncd2 = (remain * 8) & 0xFF;       // SYNCD
-                header->crc = calc_crc8_r(bbframe, 9);      // CRC
-
-                // udp_send(send_bbframe_sock, send_bbframe_ip, bbframe, framebytes);
-                addbbframe(bbframe, framebytes);
-
-                index = 10;
-
-                avail = framebytes - 10;
-            }
-            else // Some space in bbframe, full with partial packet
-            {
-
-                /*
-               bbframe[index++] = lastcrc;
-               lastcrc = crc;
-              */
-                if (remain == 0)
-                    remain = 187;
-                /*
-                else
-                remain--;
-                */
-                header->matype1 = 0xC0; // TS 0.35roff
-
-                header->matype2 = 0;                        // Input Stream Identifier
-                header->upl = htons(188 * 8);               // User Packet Length 188
-                header->dfl = htons((framebytes - 10) * 8); // Data Field Length
-                header->sync = 0x47;                        // SYNC - Copy of the user packet Sync byte
-                header->syncd1 = (remain * 8) >> 8;         // SYNCD
-                header->syncd2 = (remain * 8) & 0xFF;       // SYNCD
-                header->crc = calc_crc8_r(bbframe, 9);      // CRC
-
-                remain = 187 - avail;
-                memcpy(bbframe + index, tspacket + tsindex + 1, avail);
-                index += avail;
-                // fprintf(stderr,"Remain full remain %d %d\n",avail,index);
-
-                /*
-                static int count=0;
-                    for(int i=0;i<  framebytes;i++)
-              fprintf(stderr,"%02x ", bbframe[i]);
-              fprintf(stderr,"\n************************************************\n");
-
-              if(count++==2)          exit(1);
-              */
-
-                // udp_send(send_bbframe_sock, send_bbframe_ip, bbframe, framebytes);
-                addbbframe(bbframe, framebytes);
-                // sendudpbbframe
-
-                index = 10;
-                memcpy(bbframe + index, tspacket + tsindex + avail + 1, remain);
-                index += remain;
-                bbframe[index++] = crc;
-                tsindex += 188;
-
-                avail = framebytes - 10 - remain - 1;
-            }
-        }
-    }
-}
-#endif
 
 void *rx_ts_thread(void *arg)
 {
@@ -577,12 +469,11 @@ void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType)
     }
     fmt.fec = CodeRate;
     fmt.frame_type = (FrameType == shortframe) ? FRAME_SHORT : FRAME_NORMAL;
-    fmt.output_format = OUTPUT_FORMAT_SYMBOLS; // OUTPUT_FORMAT_BBFRAME is segfault
+    fmt.output_format = OUTPUT_FORMAT_BBFRAME; 
     fmt.pilots = PILOTS_OFF;
     fmt.roll_off = RO_0_35;
 
-    // fprintf(stderr, "Trying to set dvbs2neon \n");
-    //pthread_mutex_lock(&buffer_mutexts);
+    
     // FixMe : Modcod should be changed ONLY when a bbframe is complete or at startup
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
     modulator_mapping(fmt.constellation, CodeRate);
@@ -619,10 +510,16 @@ void setpaddingts()
 }
 
 static pthread_t p_rxts;
-void init_mux(char *mcast_ts, char *mcast_iface)
+void init_tsmux(char *mcast_ts, char *mcast_iface)
 {
     int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
-    int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, 0);
+    int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, DATAMODE_TS);
+    fmt.fec = 0;
+    fmt.frame_type = FRAME_NORMAL;
+    fmt.output_format = OUTPUT_FORMAT_BBFRAME; // OUTPUT_FORMAT_BBFRAME is segfault
+    fmt.pilots = PILOTS_OFF;
+    fmt.roll_off = RO_0_35;
+    int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
     recv_ts_sock = udp_init(mcast_ts, NULL /*mcast_iface*/, 1);
     build_crc8_table_r();
     pthread_mutex_init(&buffer_mutexts, NULL);

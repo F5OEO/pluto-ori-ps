@@ -2,7 +2,7 @@
 #define TSMUX   
 //#include "./dvbs2neon/dvbs2neon.h"
 
-extern void init_mux(char *mcast_ts,char * mcast_iface);
+extern void init_tsmux(char *mcast_ts,char * mcast_iface);
 extern void settsmodcode();
 extern void setpaddingts();
 extern uint8_t BBFrameNeonBuff[144000] __attribute__((aligned(128)));

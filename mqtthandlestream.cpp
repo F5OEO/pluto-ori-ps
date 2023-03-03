@@ -40,6 +40,8 @@
 #include <jansson.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 //#include "ad9363.h"
 
@@ -53,6 +55,7 @@
 #include "iiofshelper.h"
 
 #include "tsinputmux.h"
+#include "gsemux.h"
 #include <queue>
 
 //#include "mygse/bbheader_sink_impl.h"
@@ -128,6 +131,7 @@ static int m_offset;  // Current offset into the buffer
 size_t m_latency = 20000; // Latency at 80ms by default
 size_t Underflow = 0;
 size_t m_SR = 3000000;
+float m_averagegain=-100.0; // Impossible gain, means not AGC
 
 int m_sock;
 struct sockaddr_in m_client;
@@ -200,6 +204,14 @@ typedef struct
      ssize_t modecod;
     uint8_t bbframe[UDP_BUFF_MAX_BBFRAME];
 } buffer_t;
+
+enum 
+{
+    fec_fix,
+    fec_variable
+};
+
+int m_Fecmode=fec_fix;
 
 queue<buffer_t *> m_bbframe_queue;
 
@@ -458,12 +470,17 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     fprintf(stderr, "Tx Stream with %u buffers of %d samples\n", nbBuffer, len);
     // Change the size of the buffer
     // m_max_len = len;
+    char msgerror[255];
 
     if (m_txbuf)
     {
         iio_channel_disable(m_tx0_i); // Fix the bug https://github.com/analogdevicesinc/libiio/commit/02527e69ab57aa2eac995e964b58421b0f5af5ad
         iio_channel_disable(m_tx0_q);
+        iio_strerror(errno,msgerror,sizeof(msgerror));
+        fprintf(stderr, "channel disable tx %s\n",msgerror);
         iio_buffer_destroy(m_txbuf);
+        iio_strerror(errno,msgerror,sizeof(msgerror));
+        fprintf(stderr, "Destroy buffer %s\n",msgerror);
         m_txbuf = NULL;
     }
     if (len == 0) // We are in passthrough, don't get the stream because it is used externally
@@ -478,10 +495,11 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     iio_channel_enable(m_tx0_q);
 
     m_txbuf = iio_device_create_buffer(m_tx, len, false);
-
+    
     if (m_txbuf == NULL)
     {
-        fprintf(stderr, "Could not allocate iio mem tx\n");
+        iio_strerror(errno,msgerror,sizeof(msgerror));
+        fprintf(stderr, "Could not allocate iio mem tx %s\n",msgerror);
         // exit(1);
     }
 
@@ -905,7 +923,7 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
 
     if (NewModCode != OldModCode)
     {
-
+           fprintf(stderr, "Frame %d Constellation %d CodeRate %d\n", FrameType,Constellation,CodeRate);  
         // write_byte_from_buffer_burst(NULL, 0, true);
         //  write_byte_from_buffer_split(NULL, 0, true); // Done prior because m_code is still used
         if (BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate] == 0)
@@ -925,7 +943,8 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
             //  fprintf(stderr, "Status %d \n", status);
         }
         setneonmodcod(Constellation, CodeRate, FrameType);
-
+         //fprintf(stderr, "modocodgse  %d \n", (FrameType == 0 ? 0 : 11) + CodeRate);
+        setgsemodcod(Constellation, CodeRate, FrameType);
         // fprintf(stderr, "Status dvbs2neon_control %d \n", status);
     }
 }
@@ -1068,6 +1087,7 @@ ssize_t write_byte_from_buffer_burstpatch(unsigned char *Buffer, int len, bool r
 
     return sent;
 }
+bool SendCommand(char *skey, char *svalue);
 
 ssize_t write_bbframe()
 {
@@ -1097,13 +1117,36 @@ ssize_t write_bbframe()
     pthread_mutex_unlock(&buffer_mutextx);
     if(BBFrameLenLut[buffpluto[0]-0x2c+11]/8!=len)
     {
-        fprintf(stderr,"Warning : modcod %x bbfram len %d len %d\n",buffpluto[0],BBFrameLenLut[buffpluto[0]-0x2c+11]/8,len);
-        return 0;
+        //fprintf(stderr,"Warning : modcod %x bbfram len %d len %d\n",buffpluto[0],BBFrameLenLut[buffpluto[0]-0x2c+11]/8,len);
+        //return 0;
     }
     if ((len + 4 + IdxStart + 1) % 8 != 0)
         fprintf(stderr, "len %d is not mod 8\n", len + 4 + IdxStart + 1);
     clock_gettime(CLOCK_MONOTONIC, &start);
+
+
+
+if(m_averagegain>-90.0)
+    {
+        static float TheoricMER[]={0,-2.4,-1.2,0,1.0,2.2,3.2,4.0,4.6,5.2,6.2,6.5,5.5,6.6,7.9,9.4,10.6,11.0,9.0,10.2,11.0,11.6,12.9,13.1,12.6,13.6,14.3,15.7,16.1};
+        float offsetgain=TheoricMER[buffpluto[0]-0x2c+11];
+        if(offsetgain+m_averagegain<-20)
+        {
+            char svalue[255];
+            sprintf(svalue,"%f",offsetgain+m_averagegain);
+            fprintf(stderr,"Offset %f Gain %s for modcod %d\n",offsetgain,svalue,buffpluto[0]);
+            SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
+        }
+        else
+        {
+            fprintf(stderr,"Too much gain offset %f %f\n",offsetgain,offsetgain+m_averagegain);
+        }    
+    }    
+
     sent = iio_buffer_push_partial(m_txbuf, (len + 4 + IdxStart + 1) / 4);
+
+    // AGC TX Gain
+    
     clock_gettime(CLOCK_MONOTONIC, &now);
 
     size_t diff_us = (now.tv_sec - start.tv_sec) * 1000000L;
@@ -1121,70 +1164,7 @@ ssize_t write_bbframe()
     return sent;
 }
 
-ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len, bool reset)
-{
-    static unsigned char BufferLeft[8];
-    static int left = 0;
 
-    int ToSent = 0;
-    short *buffpluto = (short *)iio_buffer_start(m_txbuf);
-
-    unsigned char *buffplutometa = (unsigned char *)iio_buffer_start(m_txbuf);
-
-    buffplutometa[0] = m_ModCode;
-    buffplutometa[1] = 0;
-    buffplutometa[2] = 0;
-    buffplutometa[3] = 0;
-    memcpy(buffplutometa + 4, BufferLeft, left);
-    size_t sent = 0;
-
-    if (reset)
-    {
-
-        fprintf(stderr, "Loose %d in BBFRAME \n", left);
-        sent = 0;
-
-        if (left != 0)
-        {
-            int padding = 8 - (4 + left) % 8;
-            memset(buffplutometa + 4 + left, 0, padding); // -> Padding should be to complete the BBFrame ! (not only 16 aligned)
-            fprintf(stderr, "padding %d  \n", padding);
-            sent = iio_buffer_push_partial(m_txbuf, (4 + left + padding) / 4);
-            fprintf(stderr, "Sent with padding %d\n", sent);
-        }
-
-        left = 0; // We loose left bytes -> don't know how the encoder will handle it   : IT IS LOST !!
-
-        return sent;
-    }
-
-    ToSent = ((4 + left + len) / 8) * 8;
-    memcpy(buffplutometa + left + 4, Buffer, ToSent); // Fixme we transfer too much buffer (but not sent)
-
-    fprintf(stderr, "Try sending %d bytes\n", ToSent);
-    sent = iio_buffer_push_partial(m_txbuf, ToSent / 4);
-    // system("./regs.sh");
-
-    left = (4 + left + len) % 8;
-    if (left > 0)
-    {
-        fprintf(stderr, "left %d len %d tocpy %d\n", left, len, len - 1 - left);
-        memcpy(BufferLeft, Buffer + len - 1 - left, left);
-    }
-
-    // size_t sent = iio_buffer_push(m_txbuf);
-    // fprintf(stderr, "*");
-    fflush(stderr);
-    uint32_t val = 0;
-    int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
-    if (val & 1)
-    {
-        fprintf(stderr, "@");
-        fflush(stderr);
-        iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
-    }
-    return sent;
-}
 
 ssize_t WriteTestBBFrame()
 {
@@ -1355,8 +1335,31 @@ void *tx_buffer_fill_thread(void *arg)
             m_bbframe_queue.pop();
         }
         m_bbframe_queue.push(newbuf);
+         if(m_Fecmode==fec_variable)
+         {
+            
+         }
         pthread_mutex_unlock(&buffer_mutextx);
     }
+}
+
+void GetInterfaceip(char *if_name,char *ip)
+{
+    struct ifreq ifr;
+size_t if_name_len=strlen(if_name);
+if (if_name_len<sizeof(ifr.ifr_name)) {
+    memcpy(ifr.ifr_name,if_name,if_name_len);
+    ifr.ifr_name[if_name_len]=0;
+} 
+
+int fd=socket(AF_INET,SOCK_DGRAM,0);
+
+ioctl(fd,SIOCGIFADDR,&ifr);
+close(fd);
+struct sockaddr_in* ipaddr = (struct sockaddr_in*)&ifr.ifr_addr;
+printf("IP address: %s\n",inet_ntoa(ipaddr->sin_addr));
+strcpy(ip,inet_ntoa(ipaddr->sin_addr));
+
 }
 
 void SetTxMode(int Mode)
@@ -1381,20 +1384,31 @@ void SetTxMode(int Mode)
     case tx_dvbs2_ts:
     {
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        InitTxChannel(BufferLentx, 2);
+        InitTxChannel(BufferLentx, 1);
         SetFPGAMode(true);
         ResetDVBS2();
         SetDVBS2Constellation();
+        /*
+        char ip[255];
+        GetInterfaceip("eth0",ip);
+        init_tsmux("230.10.0.1:1234", ip);
+        */
         
     }
     break;
     case tx_dvbs2_gse:
     {
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        InitTxChannel(BufferLentx, 2);
+        
+        InitTxChannel(BufferLentx, 1);
         SetFPGAMode(true);
         ResetDVBS2();
         SetDVBS2Constellation();
+        /*
+        char ip[255];
+        GetInterfaceip("eth0",ip);
+        init_gsemux("230.0.0.2:1234",ip,"44.0.0.2",20000);
+        */
         
     }
     break;
@@ -1410,7 +1424,11 @@ void *tx_buffer_thread(void *arg)
 
     int64_t time_first, current_time;
     time_first = _timestamp_ns();
+
+
     pthread_mutex_init(&buffer_mutextx, NULL);
+    
+
     // udp_init();
     // strcpy(m_iface, "127.0.0.1");
     // udp_set_ip("230.0.0.1:10000", m_iface);
@@ -1437,10 +1455,10 @@ void *tx_buffer_thread(void *arg)
 
     int testcoderate = 0;
 
-    // SetFPGAMode(m_fpga);
-    // ResetDVBS2();
-    // SetDVBS2Constellation();
-    //  SetDVBS2Dummy(false);
+     char ip[255];
+     GetInterfaceip("eth0",ip);
+     init_tsmux("230.10.0.1:1234", ip);
+     init_gsemux("230.0.0.2:1234",ip,"44.0.0.2",20000);
     while (true)
     {
 
@@ -1462,7 +1480,7 @@ void *tx_buffer_thread(void *arg)
                 }
                 else
                 */    
-                    SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate);
+                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate);
                 if (!m_bbframe_queue.empty())
                 {
 
@@ -1475,7 +1493,8 @@ void *tx_buffer_thread(void *arg)
                     if (m_txmode == tx_dvbs2_ts)
                         setpaddingts();
                     else
-                        WriteTestBBFrame();
+                        setpaddinggse();
+                        //WriteTestBBFrame();
                 }
             };
             break;
@@ -1570,7 +1589,8 @@ bool SendCommand(char *skey, char *svalue)
 
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
-                      "tx/dvbs2/coderate", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/sr", ""};
+                      "tx/dvbs2/coderate", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/sr","tx/dvbs2/agcgain",
+                       "tx/dvbs2/fecmode", ""};
 enum defidx
 {
     listcmd,
@@ -1584,7 +1604,9 @@ enum defidx
     cmd_txdvbs2coderate,
     cmd_txdvbs2constellation,
     cmd_txdvbs2frame,
-    cmd_txdvbs2sr
+    cmd_txdvbs2sr,
+    cmd_txdvbs2averagegain,
+    cmd_txdvbs2fecmode
 
 };
 
@@ -1897,9 +1919,49 @@ bool HandleCommand(char *key, char *svalue)
         m_s2sr = atol(svalue);
 
          publish("tx/sr",(float)4*m_s2sr,false);
-        //  Fixme : Should be publish on command
+        
         break;
     }
+    case cmd_txdvbs2averagegain:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+            publish("tx/dvbs2/agcgain", m_averagegain);
+            break;
+        }
+        m_averagegain = atof(svalue);
+        fprintf(stderr,"Average gain %f\n",m_averagegain);
+         publish("tx/dvbs2/agcgain",m_averagegain);
+        
+        break;
+    }
+    case cmd_txdvbs2fecmode:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+            if(m_Fecmode==fec_fix)
+                publish("tx/dvbs2/fecmode", "fixed");
+            if(m_Fecmode==fec_variable)
+                publish("tx/dvbs2/fecmode", "variable");    
+            break;
+        }
+        if(strcmp(svalue,"fixed")==0)
+        {
+           m_Fecmode=fec_fix;
+           publish("tx/dvbs2/fecmode",svalue);
+        }
+        else
+        if(strcmp(svalue,"variable")==0)
+        {
+           m_Fecmode=fec_variable;
+           publish("tx/dvbs2/fecmode",svalue);
+        }
+        else           
+         publish("tx/dvbs2/fecmode","bad");
+        
+        break;
+    }
+    
     }
     return true;
 }
@@ -1997,7 +2059,7 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     {
         fprintf(stderr, "Tx thread Started\n");
     }
-
+/*
     if (pthread_create(&(m_tidtxfillbuff[0]), NULL, &tx_buffer_fill_thread, NULL) != 0)
     {
         fprintf(stderr, "Tx thread cannot be started\n");
@@ -2006,6 +2068,6 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     {
         fprintf(stderr, "Tx thread Started\n");
     }
-
-    init_mux("230.10.0.1:1234", NULL);
+*/
+    
 }
