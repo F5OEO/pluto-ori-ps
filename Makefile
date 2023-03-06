@@ -15,8 +15,15 @@ pluto_stream: pluto_stream.cpp mymqtt.h mqtthandlestream.h mqtthandlestream.cpp 
 bbgse: mygse/bbgse.c 
 	$(CC) $(FLAGS) $(INC) -DPLUTO -o bbgse mygse/bbgse.c -lm -lrt -lpthread -lmosquitto -ljansson -liio -lgse
 install: 
-	cp bbgse $(PAPR_ORI)
+	
 	cp pluto_stream $(PAPR_ORI)
 	cp pluto_mqtt_ctrl $(PAPR_ORI)
+	cp qo100initdvb.sh $(PAPR_ORI)
+	cp gain.sh $(PAPR_ORI)
+	cp mute.sh $(PAPR_ORI)
+	cp unmute.sh $(PAPR_ORI)
+	cp settxmode.sh $(PAPR_ORI)
+	cp initdvb.sh $(PAPR_ORI)
+
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse

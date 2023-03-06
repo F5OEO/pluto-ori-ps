@@ -104,6 +104,7 @@ pthread_mutex_t buffer_mutexrx;
 static pthread_t m_tidtx[1];
 static bool RunTx = true;
 pthread_mutex_t buffer_mutextx;
+pthread_mutex_t bufpluto_mutextx;
 
 static pthread_t m_tidtxfillbuff[1];
 
@@ -471,16 +472,18 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     // Change the size of the buffer
     // m_max_len = len;
     char msgerror[255];
-
+ pthread_mutex_lock(&bufpluto_mutextx);
     if (m_txbuf)
     {
-        iio_channel_disable(m_tx0_i); // Fix the bug https://github.com/analogdevicesinc/libiio/commit/02527e69ab57aa2eac995e964b58421b0f5af5ad
-        iio_channel_disable(m_tx0_q);
-        iio_strerror(errno,msgerror,sizeof(msgerror));
-        fprintf(stderr, "channel disable tx %s\n",msgerror);
+        iio_buffer_cancel(m_txbuf);
+       
         iio_buffer_destroy(m_txbuf);
         iio_strerror(errno,msgerror,sizeof(msgerror));
         fprintf(stderr, "Destroy buffer %s\n",msgerror);
+         iio_channel_disable(m_tx0_i); // Fix the bug https://github.com/analogdevicesinc/libiio/commit/02527e69ab57aa2eac995e964b58421b0f5af5ad
+        iio_channel_disable(m_tx0_q);
+        iio_strerror(errno,msgerror,sizeof(msgerror));
+        fprintf(stderr, "channel disable tx %s\n",msgerror);
         m_txbuf = NULL;
     }
     if (len == 0) // We are in passthrough, don't get the stream because it is used externally
@@ -500,11 +503,12 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     {
         iio_strerror(errno,msgerror,sizeof(msgerror));
         fprintf(stderr, "Could not allocate iio mem tx %s\n",msgerror);
+        sleep(10000);
         // exit(1);
     }
 
     iio_buffer_set_blocking_mode(m_txbuf, true);
-
+pthread_mutex_unlock(&bufpluto_mutextx);
     /*
     int ret = iio_device_reg_write(m_tx, 0x80000088, 0x4);
     if (ret)
@@ -1095,12 +1099,14 @@ ssize_t write_bbframe()
 
     unsigned int LazyLut[] = {7, 6, 5, 4, 3, 2, 1, 0};
 
-    unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
+    
 
     ssize_t sent = 0;
     // Normal behavior
 
     pthread_mutex_lock(&buffer_mutextx);
+    pthread_mutex_lock(&bufpluto_mutextx);
+    unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
     buffer_t *newbuf = m_bbframe_queue.front();
     ssize_t len = newbuf->size;
     unsigned int IdxStart = LazyLut[(len + 4) % 8];
@@ -1144,7 +1150,7 @@ if(m_averagegain>-90.0)
     }    
 
     sent = iio_buffer_push_partial(m_txbuf, (len + 4 + IdxStart + 1) / 4);
-
+pthread_mutex_unlock(&bufpluto_mutextx);
     // AGC TX Gain
     
     clock_gettime(CLOCK_MONOTONIC, &now);
