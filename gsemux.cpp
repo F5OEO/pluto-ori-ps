@@ -81,7 +81,7 @@ extern u_int16_t udp_init(char *ip, const char *iface, int rx); // interface to 
 size_t udp_receive(u_int16_t sock, unsigned char *b, unsigned int maxlen);
 extern int m_Fecmode;
 extern int m_txmode;
-
+ extern unsigned char  getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate,uint Pilots);
 enum 
 {
     fec_fix,
@@ -105,12 +105,13 @@ uint8_t m_gsemodcod=0;
 uint m_gseconstellation=0;
 uint    m_gsecoderate=0;
 uint    m_gseframetype=0;
+uint    m_gsepilots=0;
 
 size_t m_framelen=0;
 char tun_name[] = "gse0";
-int is_debug = 1;
+int is_debug = 0;
 int tun;
-long m_tun_read_timeout = 10000; // 10ms
+long m_tun_read_timeout = 100000; // 10ms
 
 char m_mcast_rxgse[255];
 char  m_mcast_rxiface[255];
@@ -418,7 +419,7 @@ struct bbheader
 };
 
 
-#define MAX_QUEUE_ITEM 20
+#define MAX_QUEUE_ITEM 50
 enum
 {
     tx_passtrough,
@@ -479,7 +480,9 @@ void *rx_tun_thread(void *arg)
     {
         // int len = read_from_tun(tun, ippacket);
         gse_vfrag_t *vfrag_pdu = NULL;
-        uint16_t framebytes = BBFrameLenLut[(m_gseframetype == 0 ? 0 : 11) + m_gsecoderate+tempcoderate]/8;
+
+        uint16_t framebytes = BBFrameLenLut[((m_gseframetype == 0 ? 11 : 0) + m_gsecoderate+tempcoderate)%22]/8;
+        m_gsemodcod=getdvbs2modcod(m_gseframetype,m_gseconstellation,(m_gsecoderate+tempcoderate)%11,m_gsepilots);
          
         //uint16_t framebytes = m_framelen;
         unsigned char ippacket[GSE_MAX_PDU_LENGTH];
@@ -602,12 +605,12 @@ void *rx_tun_thread(void *arg)
         }
         else if (avail != framebytes - 10) // BBFRAME has space that could be used but was not due to lack of data
         {
-            fprintf(stderr, "GSE: BBFRAME space wasted. Remaining %hu bytes\n", avail);
+            //fprintf(stderr, "GSE: BBFRAME space wasted. Remaining %hu bytes\n", avail);
         }
 
         data += avail;          // Required to pass the check below (if(data != end))
                                 // EN 302 307-1 section 5.1.6 Base-Band Header insertion
-        header->matype1 = 0x70; // Generic continuous 0.35roff
+        header->matype1 = 0x72; // Generic continuous 0.20roff
 
         header->matype2 = 0;                                // Input Stream Identifier
         header->upl = htons(0 * 8);                         // User Packet Length (0 for Generic continuous)
@@ -625,7 +628,10 @@ void *rx_tun_thread(void *arg)
             // fprintf(stderr, "send udp %d \n",framebytes-avail);
             // for (int i = 0; i < 10; i++) fprintf(stderr, "%x ", bbframe[i]);
             // fprintf(stderr, " -> CRC %x\n",calc_crc8(bbframe, 9));
-            m_gsemodcod=m_gseframetype + m_gseconstellation + m_gsecoderate+tempcoderate;
+            //m_gsemodcod=m_gseframetype + m_gseconstellation + m_gsecoderate+tempcoderate;
+
+            //m_gsemodcod=getdvbs2modcod(m_gseframetype,m_gseconstellation,(m_gsecoderate+tempcoderate)%11,m_gsepilots);
+
             addgsebbframe(bbframe,framebytes /*framebytes - avail*/,m_gsemodcod );
             if(m_Fecmode==fec_variable)
             {
@@ -664,18 +670,23 @@ void setpaddinggse()
             header->crc = calc_crc8_r(BBFrameNull, 9);      // CRC
 
             //size_t len = BBFrameLenLut[m_gsemodcod]/8;
-            uint16_t framebytes = BBFrameLenLut[0 + 0]/8;
-            m_gsemodcod=0+0+m_gseconstellation; // We get the most robust and shortest frame but using same constellation
+            uint16_t framebytes = BBFrameLenLut[(m_gseframetype == 0 ? 11 : 0) + m_gsecoderate]/8;
+            m_gsemodcod = getdvbs2modcod(m_gseframetype,m_gseconstellation ,m_gsecoderate,m_gsepilots);                       
+
+            //uint16_t framebytes = BBFrameLenLut[0]/8; // ShortFrame 1/4
+            //m_gsemodcod = getdvbs2modcod(1/*short*/,m_gseconstellation ,0,m_gsepilots);                       
+            
             addgsebbframe(BBFrameNull,framebytes,m_gsemodcod );
       
 
 }
 
-void setgsemodcod(uint Constellation, uint CodeRate, uint FrameType)
+void setgsemodcod(uint Constellation, uint CodeRate, uint FrameType,uint Pilots)
 {
    m_gseconstellation=Constellation;
    m_gsecoderate=CodeRate;
    m_gseframetype=FrameType;
+   m_gsepilots=Pilots;
 }
 
 static pthread_t p_rxbbframe;

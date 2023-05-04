@@ -65,7 +65,7 @@ bool publish(char *mqttkey, float value)
     sprintf(svalue, "%.0f", value);
     char pubkey[255];
     sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-    //fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
+    // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
     mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
     return true;
 }
@@ -74,7 +74,7 @@ bool publish(char *mqttkey, char *svalue)
 {
     char pubkey[255];
     sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-    //fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
+    // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
     mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
     return true;
 }
@@ -84,10 +84,10 @@ bool publishstatus(char *iio_key, char *mqttkey)
     FILE *fdread = NULL;
     fdread = fopen(iio_key, "r");
     char svalue[255];
-    //fgets(svalue,255,fdread);
+    // fgets(svalue,255,fdread);
     fscanf(fdread, "%s", svalue); // To avoid getting units
     fclose(fdread);
-    //fprintf(stderr,"%s %s\n",iio_key,svalue);
+    // fprintf(stderr,"%s %s\n",iio_key,svalue);
     char pubkey[255];
     sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
 
@@ -95,7 +95,7 @@ bool publishstatus(char *iio_key, char *mqttkey)
     return true;
 }
 
-void GetKey(char *iio_key,char *svalue)
+void GetKey(char *iio_key, char *svalue)
 {
     FILE *fdread = NULL;
     fdread = fopen(iio_key, "r");
@@ -130,19 +130,22 @@ bool SendCommand(char *skey, char *svalue)
     return true;
 }
 
-float set_filter_gain(double *filter, float gain, int ntaps) {
-	double sum = 0;
-	double max=0;
-	for (int i = 0; i < ntaps; i++) {
-		sum += filter[i];
-	}
-	gain = gain / sum;
-	for (int i = 0; i < ntaps; i++) {
-		filter[i] = filter[i] * gain;
-		if(fabs(filter[i])>fabs(max))
-			max=filter[i];
-	}
-	return max;
+float set_filter_gain(double *filter, float gain, int ntaps)
+{
+    double sum = 0;
+    double max = 0;
+    for (int i = 0; i < ntaps; i++)
+    {
+        sum += filter[i];
+    }
+    gain = gain / sum;
+    for (int i = 0; i < ntaps; i++)
+    {
+        filter[i] = filter[i] * gain;
+        if (fabs(filter[i]) > fabs(max))
+            max = filter[i];
+    }
+    return max;
 }
 
 void build_lpf_filter(double *filter, float bw, int ntaps)
@@ -160,7 +163,7 @@ void build_lpf_filter(double *filter, float bw, int ntaps)
         filter[i] = (double)a;
         t = t + 1.0;
     }
-    set_filter_gain(filter,1.0,ntaps);
+    set_filter_gain(filter, 1.0, ntaps);
 }
 
 void build_rrc_filter(double *filter, float rolloff, int ntaps, int samples_per_symbol)
@@ -181,40 +184,40 @@ void build_rrc_filter(double *filter, float rolloff, int ntaps, int samples_per_
             c = sin((1.0 - B) * M_PI * t / Ts) / (4.0 * B * t / Ts);
 
         d = (1.0 - (4.0 * B * t / Ts) * (4.0 * B * t / Ts));
-        //filter[i] = (b+c)/(a*d);//beardy
-        filter[i] = (float)(a * (b + c) / d); //nasa
+        // filter[i] = (b+c)/(a*d);//beardy
+        filter[i] = (float)(a * (b + c) / d); // nasa
         t = t + 1.0;
     }
-    set_filter_gain(filter,1.0,ntaps);
+    set_filter_gain(filter, 1.0, ntaps);
 }
 
-void load_ad9363fir( double *fir, int taps, int ratio, bool enable, float gain, int firgain,bool tx)
+void load_ad9363fir(double *fir, int taps, int ratio, bool enable, float gain, int firgain, bool tx)
 {
 
     int buffsize = 8192;
     char *buf = (char *)malloc(buffsize);
     int clen = 0;
-    if(tx) // Fir Tx gain {-6,0}
+    if (tx) // Fir Tx gain {-6,0}
     {
-         clen += snprintf(buf + clen, buffsize - clen, "TX 3 GAIN %d INT %d\n",firgain, ratio); //The filter provides a fixed +6dB gain to maximize dynamic range, so the programmable gain is typically set to -6dB to produce a net gain of 0dB
-         fprintf(stderr,"TX 3 GAIN %d INT %d\n",firgain, ratio);
+        clen += snprintf(buf + clen, buffsize - clen, "TX 3 GAIN %d INT %d\n", firgain, ratio); // The filter provides a fixed +6dB gain to maximize dynamic range, so the programmable gain is typically set to -6dB to produce a net gain of 0dB
+        //fprintf(stderr, "TX 3 GAIN %d INT %d\n", firgain, ratio);
     }
-    else //Fir Rx gain {-12,-6,0,+6}
+    else // Fir Rx gain {-12,-6,0,+6}
     {
-         clen += snprintf(buf + clen, buffsize - clen, "RX 3 GAIN %d DEC %d\n",firgain, ratio); //The filter provides a fixed +6dB gain to maximize dynamic range, so the programmable gain is typically set to -6dB to produce a net gain of 0dB
-         fprintf(stderr,"RX 3 GAIN %d DEC %d\n",firgain, ratio);
-    }     
-    
-    short coeffir = tx?0x7FFF:0x7FFF;
+        clen += snprintf(buf + clen, buffsize - clen, "RX 3 GAIN %d DEC %d\n", firgain, ratio); // The filter provides a fixed +6dB gain to maximize dynamic range, so the programmable gain is typically set to -6dB to produce a net gain of 0dB
+        //fprintf(stderr, "RX 3 GAIN %d DEC %d\n", firgain, ratio);
+    }
+
+    short coeffir = tx ? 0x7FFF : 0x7FFF;
     for (int i = 0; i < taps; i++)
     {
 
-        clen += snprintf(buf + clen, buffsize - clen, "%d\n", (short)(coeffir * fir[i] * gain)); //Fixme ! 1FFF instead of 0x3FFF seems better but should have to be inspect
-        //fprintf(stderr,"%d\n", (short)(coeffir * fir[i] * gain));
+        clen += snprintf(buf + clen, buffsize - clen, "%d\n", (short)(coeffir * fir[i] * gain)); // Fixme ! 1FFF instead of 0x3FFF seems better but should have to be inspect
+        // fprintf(stderr,"%d\n", (short)(coeffir * fir[i] * gain));
     }
     clen += snprintf(buf + clen, buffsize - clen, "\n");
 
-    //fprintf(stderr,"Coef:%s\n",buf);
+    // fprintf(stderr,"Coef:%s\n",buf);
 
     FILE *fdwrite = NULL;
     fdwrite = fopen("/sys/bus/iio/devices/iio:device0/filter_fir_config", "wb");
@@ -224,12 +227,12 @@ void load_ad9363fir( double *fir, int taps, int ratio, bool enable, float gain, 
     /*
     if(tx&&enable)
       SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "1"); //Enable FIR TX
-   if((!tx)&&enable) 
+   if((!tx)&&enable)
         SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "1");  //Enable FIR RX
-    */    
+    */
     free(buf);
 }
- 
+
 enum
 {
     typerrc,
@@ -241,16 +244,16 @@ enum
 The last/first digital filter in the RX/TX signal path is a programmable poly-phase FIR filter. The RX/TX FIR filter can decimate/interpolate by a factor of 1, 2, or 4, or it can be bypassed if not needed. The filter taps are configurable in groups of 16 between a minimum of 16 and a maximum of 128 taps. The RX FIR also has a programmable gain of -12dB, -6dB, 0dB, or +6dB. The filter provides a fixed +6dB gain to maximize dynamic range, so the programmable gain is typically set to -6dB to produce a net gain of 0dB. The TX FIR also has a programmable gain setting of 0dB or -6dB. Be aware there are some limitations in terms of the maximum number of taps supported by the different clock ratios, please consult the AD9361 manual for more details. The AD9361 device driver will warn if a programmed filter doesn’t match the limits.
 */
 
-void setad9363filter(int ratio, int hardupsample, float rolloff, int type, float digitalgain, bool db6boost,bool enable,bool tx)
+void setad9363filter(int ratio, int hardupsample, float rolloff, int type, float digitalgain, bool db6boost, bool enable, bool tx)
 {
 
     double fir[128];
-    
+
     int NbTaps;
     if (hardupsample > 1)
     {
         NbTaps = 127;
-        //NbTaps = 63;
+        // NbTaps = 63;
     }
     else
     {
@@ -261,23 +264,23 @@ void setad9363filter(int ratio, int hardupsample, float rolloff, int type, float
     {
     case typerrc:
     {
-        
+
         build_rrc_filter(fir, rolloff, NbTaps, hardupsample);
     }
     break;
     case typelpf:
     {
-       build_lpf_filter(fir, (rolloff) / (float)(hardupsample), NbTaps);
+        build_lpf_filter(fir, (rolloff) / (float)(hardupsample), NbTaps);
     }
     break;
     }
-    float gain = digitalgain;//log2(2 * hardupsample) * digitalgain;
-    
+    float gain = digitalgain; // log2(2 * hardupsample) * digitalgain;
+
     fir[NbTaps] = 0.0;
-    if(tx)
-        load_ad9363fir(fir, NbTaps + 1, hardupsample, enable, gain,db6boost?0:-6,tx);
+    if (tx)
+        load_ad9363fir(fir, NbTaps + 1, hardupsample, enable, gain, db6boost ? 0 : -6, tx);
     else
-        load_ad9363fir(fir, NbTaps + 1, hardupsample, enable, gain,db6boost?0:-6,tx);
+        load_ad9363fir(fir, NbTaps + 1, hardupsample, enable, gain, db6boost ? 0 : -6, tx);
 }
 
 /*
@@ -289,14 +292,14 @@ bool ComputeSR(int tx,char *svalue)
         {
               publish("rx/finalsr", m_finalrxsr);
               publish("tx/finalsr", m_finaltxsr);
-                          
+
         }
         publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
         //publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "rx/sr");
 
         return true; // This is a request status
     }
-    
+
     float MinADC = 25e6 / 12;
     float MaxADC = 61.4e6;
     float fpgadecim = 32.0;
@@ -351,7 +354,7 @@ bool ComputeSR(int tx,char *svalue)
         {
             ad9363decim = 4.0;
             fpgadecim = 32.0;
-            
+
         }
     }
 
@@ -364,12 +367,11 @@ bool ComputeRxSR(char *svalue)
     {
         if (m_finalrxsr != 0) // Fixme : Should be calculated with sr/fpga flag and ad decim
         {
-            
+
             publish("rx/finalsr", m_finalrxsr);
-            
         }
         publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
-       // publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "rx/sr");
+        // publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "rx/sr");
 
         return true; // This is a request status
     }
@@ -381,7 +383,7 @@ bool ComputeRxSR(char *svalue)
     bool result = true;
     float RequestSR;
     float ADCSR;
-    
+
     RequestSR = atof(svalue);
 
     if (RequestSR > MaxADC) // >61.4M
@@ -398,14 +400,14 @@ bool ComputeRxSR(char *svalue)
         if (RequestSR < MaxADC / 4)
         {
 
-            //ad9363decim=4.0;
+            // ad9363decim=4.0;
             ad9363decim = 1.0;
             fpgadecim = 1.0;
         }
         else if (RequestSR < MaxADC / 2)
         {
 
-            //ad9363decim=2.0;
+            // ad9363decim=2.0;
             ad9363decim = 1.0;
             fpgadecim = 1.0;
         }
@@ -432,70 +434,67 @@ bool ComputeRxSR(char *svalue)
         {
             ad9363decim = 4.0;
             fpgadecim = 32.0;
-            
         }
     }
 
-    //fprintf(stderr,"SR -> ad9363 %.0f fpga %.0f \n",ad9363decim,fpgadecim);
+    // fprintf(stderr,"SR -> ad9363 %.0f fpga %.0f \n",ad9363decim,fpgadecim);
     ADCSR = RequestSR * fpgadecim * ad9363decim;
     char sSR[255];
     sprintf(sSR, "%.0f", ADCSR);
-    m_adcdacsr=RequestSR * fpgadecim;
+    m_adcdacsr = RequestSR * fpgadecim;
     // First set result SR
     SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
-    SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); //RX Fpga
+    SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); // RX Fpga
 
     //  SSCANF de /sys/bus/iio/devices/iio:device0/rx_path_rates
-    //NbTaps = ADC/RXSAMP * 16 !!!!! FixMe for better filtering
+    // NbTaps = ADC/RXSAMP * 16 !!!!! FixMe for better filtering
 
     // AD9363Decim
     if (ad9363decim > 1.0)
     {
-        setad9363filter(1, ad9363decim, 1.0 / ad9363decim, typelpf, 1.0, false,true,false);
-        setad9363filter(1, ad9363decim, 1.0 / ad9363decim, typelpf, 1.0, true,true,true); // We need also to do tx for now
+        setad9363filter(1, ad9363decim, 1.0 / ad9363decim, typelpf, 1.0, false, true, false);
+        setad9363filter(1, ad9363decim, 1.0 / ad9363decim, typelpf, 1.0, true, true, true); // We need also to do tx for now
 
         SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "1");
-        
 
         sprintf(sSR, "%.0f", ADCSR / ad9363decim);
         SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
-       
     }
     else
     {
         SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "0");
-        //SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "0"); //Disable  ADFIR
-        //SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "0"); //Disable  ADFIR
     }
 
     if (fpgadecim > 1.0)
     {
         sprintf(sSR, "%.0f", ADCSR / 8 / ad9363decim);
-        fprintf(stderr,"adcsr %f fpga %s\n",ADCSR,sSR);
-         SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); //RX Fpga
+        fprintf(stderr, "adcsr %f fpga %s\n", ADCSR, sSR);
+        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     else
     {
         sprintf(sSR, "%.0f", ADCSR / ad9363decim);
         SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); //RX Fpga
+        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
-    //Automatic Analog LPF bandwidth
+    // Automatic Analog LPF bandwidth
     if (RequestSR > 200e3)
     {
         sprintf(sSR, "%.0f", RequestSR);
         SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", sSR);
     }
     else
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", "200000"); //Mini bandwidth
+        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", "200000"); // Mini bandwidth
     m_finalrxsr = RequestSR;
     publish("finalsr", m_finalrxsr);
     publish("rx/finalsr", m_finalrxsr);
-    publish("rx/fpgadecim",(float)fpgadecim);
-    publish("rx/ad9361decim",(float)ad9363decim);
+    publish("rx/fpgadecim", (float)fpgadecim);
+    publish("rx/ad9361decim", (float)ad9363decim);
     publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
     publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "rx/sr");
 
@@ -508,24 +507,24 @@ bool ComputeTxSR(char *svalue)
     {
         if (m_finaltxsr != 0) // Fixme : Should be calculated with sr/fpga flag and ad interpol
         {
-            //publish("finalsr", m_finaltxsr);
+            // publish("finalsr", m_finaltxsr);
             publish("tx/finalsr", m_finaltxsr);
         }
-        publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
-       // publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "tx/sr");
+        publishstatus("/sys/bus/iio/devices/iio:device0/out_voltage_sampling_frequency", "sr");
+        // publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "tx/sr");
         return true; // This is a request status
     }
- #define FPGA_INTERPOL (8.0)
-    float MinDAC = 25e6 / 12 ;
+#define FPGA_INTERPOL (8.0)
+    float MinDAC = 25e6 / 12;
     float MaxDAC = 61.4e6;
-    float fpgainterpol = FPGA_INTERPOL; //FPGA INTERPOL
+    float fpgainterpol = FPGA_INTERPOL; // FPGA INTERPOL
     float ad9363interpol = 4.0;
 
     bool result = true;
     float RequestSR;
     float DACSR;
-    
-    RequestSR = atof(svalue)  ; // FPGA DVB has a 2x interpolator
+
+    RequestSR = atof(svalue); 
 
     if (RequestSR > MaxDAC) // >61.4M
     {
@@ -542,14 +541,14 @@ bool ComputeTxSR(char *svalue)
         if (RequestSR < MaxDAC / 4)
         {
 
-            //ad9363decim=4.0;
+            // ad9363decim=4.0;
             ad9363interpol = 1.0;
             fpgainterpol = 1.0;
         }
         else if (RequestSR < MaxDAC / 2)
         {
 
-            //ad9363decim=2.0;
+            // ad9363decim=2.0;
             ad9363interpol = 1.0;
             fpgainterpol = 1.0;
         }
@@ -564,19 +563,19 @@ bool ComputeTxSR(char *svalue)
     {
         ad9363interpol = 4.0;
         fpgainterpol = 1.0;
-       //ad9363interpol = 1.0;
-       //     fpgainterpol =FPGA_INTERPOL;
+        // ad9363interpol = 1.0;
+        //      fpgainterpol =FPGA_INTERPOL;
     }
     else
     {
         if (RequestSR >= MinDAC / FPGA_INTERPOL)
         {
             ad9363interpol = 1.0;
-            fpgainterpol =FPGA_INTERPOL;
+            fpgainterpol = FPGA_INTERPOL;
         }
         else
         {
-           
+
             ad9363interpol = 4.0;
             fpgainterpol = FPGA_INTERPOL;
         }
@@ -585,31 +584,32 @@ bool ComputeTxSR(char *svalue)
     DACSR = RequestSR * fpgainterpol * ad9363interpol;
     char sSR[255];
     sprintf(sSR, "%.0f", DACSR);
-     m_adcdacsr=RequestSR * fpgainterpol;
+    m_adcdacsr = RequestSR * fpgainterpol;
     // First set result SR
-    
+
     char sMute[10];
     GetKey("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", sMute);
     // Mute if we are using interpol
-    if(fpgainterpol * ad9363interpol>1) 
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "1");    
+    if (fpgainterpol * ad9363interpol > 1)
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "1");
     SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
-    SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); //TX Fpga
-     SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); //RX Fpga
+    SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
+    SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
 
     // AD9363Interpol
     if (ad9363interpol > 1.0)
     {
         // Work for DVBS2 mode ! Fixme to see with general IQ
-        setad9363filter(1, ad9363interpol,2.0/((float)ad9363interpol), typelpf, 3.0, true,true,true);
-        //setad9363filter(1, ad9363interpol, 0.7, typerrc, 1.0, false,true,true);
-        setad9363filter(1, ad9363interpol,1, typelpf, 1.0, false,true,false); // WE need also to do it on RX
+        setad9363filter(1, ad9363interpol, 2.0 / ((float)ad9363interpol), typelpf, 3.0, true, true, true);
 
-        //setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,true);
-        //setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,false);
+        // setad9363filter(1, ad9363interpol, 0.7, typerrc, 1.0, false,true,true);
+        setad9363filter(1, ad9363interpol, 1, typelpf, 1.0, false, true, false); // WE need also to do it on RX
+
+        // setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,true);
+        // setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,false);
         SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "1");
         // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "1");
-        //SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "1");
+        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "1");
 
         sprintf(sSR, "%.0f", DACSR / ad9363interpol);
         SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
@@ -617,80 +617,231 @@ bool ComputeTxSR(char *svalue)
     else
     {
         SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "0");
-        //SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "0"); //Disable  ADFIR
-        //SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "0"); //Disable  ADFIR
     }
 
     if (fpgainterpol > 1.0)
     {
         sprintf(sSR, "%.0f", DACSR / 8 / ad9363interpol);
-        fprintf(stderr,"dacsr %f fpga %s\n",DACSR,sSR);
+        fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
         SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); // RX Fpga
+        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     else
     {
         sprintf(sSR, "%.0f", DACSR / ad9363interpol);
         SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); // RX Fpga
+        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
-    //Automatic Analog LPF bandwidth
+    // Automatic Analog LPF bandwidth
     if (RequestSR > 200e3)
     {
         sprintf(sSR, "%.0f", RequestSR);
         SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", sSR);
     }
     else
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", "200000"); //Mini bandwidth
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", "200000"); // Mini bandwidth
     m_finaltxsr = RequestSR;
     // Unmute if we are not muted before
-    if(atoi(sMute)==0)
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown","0");    
+    if (atoi(sMute) == 0)
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "0");
     publish("tx/finalsr", m_finaltxsr);
     publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
     publishstatus("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", "tx/sr");
-    publish("tx/fpgainterpol",(float)fpgainterpol);
-    publish("tx/ad9363interpol",(float)ad9363interpol);
-   
+    publish("tx/fpgainterpol", (float)fpgainterpol);
+    publish("tx/ad9363interpol", (float)ad9363interpol);
+
     return result;
 }
 
+//Special case where we want to rx at max bandwidth
+bool ComputeTxSRDVBS2(char *svalue)
+{
+    if (strcmp(svalue, "?") == 0)
+    {
+       
+        if (m_finaltxsr != 0) // Fixme : Should be calculated with sr/fpga flag and ad interpol
+        {
+            // publish("finalsr", m_finaltxsr);
+            publish("tx/finalsr", m_finaltxsr);
+        }
+        publishstatus("/sys/bus/iio/devices/iio:device0/out_voltage_sampling_frequency", "sr");
+        
+        
+        // publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "tx/sr");
+        return true; // This is a request status
+    }
+#define FPGA_INTERPOL (8.0)
+    float MinDAC = 25e6 / 12;
+    float MaxDAC = 61.4e6;
+    float fpgainterpol = FPGA_INTERPOL; // FPGA INTERPOL
+    float ad9363interpol = 4.0;
 
+    bool result = true;
+    float RequestSR;
+    float DACSR;
+
+    RequestSR = atof(svalue); 
+
+    if (RequestSR > MaxDAC) // >61.4M
+    {
+        return false;
+    }
+    if (RequestSR < MinDAC / fpgainterpol / ad9363interpol) // < 16K
+    {
+        // OR NEED a soft upsampler
+        return false;
+    }
+
+    if (RequestSR >= MinDAC) // High bitrate, no fpga but ad9363ecim if possible
+    {
+        if (RequestSR < MaxDAC / 8)
+        {
+
+            
+            ad9363interpol = 1.0;
+            fpgainterpol = FPGA_INTERPOL;
+        }
+        else if (RequestSR < MaxDAC / 4)
+        {
+
+            // ad9363decim=2.0;
+            ad9363interpol = 4.0;
+            fpgainterpol = 1.0;
+        }
+        else
+        {
+
+            ad9363interpol = 1.0;
+            fpgainterpol = 1.0;
+        }
+    }
+    else if (RequestSR >= MinDAC / FPGA_INTERPOL) // We use AD decim
+    {
+        ad9363interpol = 1.0;
+        fpgainterpol = 1.0;
+        // ad9363interpol = 1.0;
+        fpgainterpol =FPGA_INTERPOL;
+    }
+    else
+    {
+        
+            ad9363interpol = 4.0;
+            fpgainterpol = FPGA_INTERPOL;
+        
+    }
+
+    DACSR = RequestSR * fpgainterpol * ad9363interpol;
+    char sSR[255];
+    sprintf(sSR, "%.0f", DACSR);
+    m_adcdacsr = RequestSR * fpgainterpol;
+    // First set result SR
+
+    char sMute[10];
+    GetKey("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", sMute);
+    // Mute if we are using interpol
+    if (fpgainterpol * ad9363interpol > 1)
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "1");
+    SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
+    SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
+    SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+
+    // AD9363Interpol
+    if (ad9363interpol > 1.0)
+    {
+        // Work for DVBS2 mode ! Fixme to see with general IQ
+        setad9363filter(1, ad9363interpol, 2.0 / ((float)ad9363interpol), typelpf, 3.0, true, true, true);
+
+        // setad9363filter(1, ad9363interpol, 0.7, typerrc, 1.0, false,true,true);
+        setad9363filter(1, ad9363interpol, 1, typelpf, 1.0, false, true, false); // WE need also to do it on RX
+
+        // setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,true);
+        // setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,false);
+        SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "1");
+        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "1");
+        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "1");
+
+        sprintf(sSR, "%.0f", DACSR / ad9363interpol);
+        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
+    }
+    else
+    {
+        SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "0");
+        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "0"); //Disable  ADFIR
+    }
+
+    if (fpgainterpol > 1.0)
+    {
+        sprintf(sSR, "%.0f", DACSR / 8 / ad9363interpol);
+        fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
+        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+    }
+
+    else
+    {
+        sprintf(sSR, "%.0f", DACSR / ad9363interpol);
+        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+    }
+
+    // Automatic Analog LPF bandwidth
+    if (RequestSR > 200e3)
+    {
+        sprintf(sSR, "%.0f", RequestSR);
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", sSR);
+    }
+    else
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", "200000"); // Mini bandwidth
+    m_finaltxsr = RequestSR;
+    // Unmute if we are not muted before
+    if (atoi(sMute) == 0)
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "0");
+    publish("tx/finalsr", m_finaltxsr);
+    publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
+    publishstatus("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", "tx/sr");
+    publish("tx/fpgainterpol", (float)fpgainterpol);
+    publish("tx/ad9363interpol", (float)ad9363interpol);
+
+    return result;
+}
 
 size_t SetFormat(size_t requestformat)
 {
     // size_t current_value=readiiohex("/sys/bus/iio/devices/iio:device3/direct_reg_access");
-    size_t value = ReadRegister(0x79020000+0xBC);
+    size_t value = ReadRegister(0x79020000 + 0xBC);
     switch (requestformat)
     {
     case cs16:
     {
 
-        WriteRegister(0x79020000+0xBC, (value & 0xFFF1) | 0);
+        WriteRegister(0x79020000 + 0xBC, (value & 0xFFF1) | 0);
         break;
     }
     case cs8:
     {
 
-        WriteRegister(0x79020000+0xBC, (value & 0xFFF1) | 2);
+        WriteRegister(0x79020000 + 0xBC, (value & 0xFFF1) | 2);
 
         break;
     }
     case cs16fft:
     {
-        WriteRegister(0x79020000+0xBC, (value & 0xFFF1) | 4);
+        WriteRegister(0x79020000 + 0xBC, (value & 0xFFF1) | 4);
         break;
     }
     default:
         return m_format;
     }
-    return requestformat; 
+    return requestformat;
 }
 
-char strcmd[][255] = {"listcmd", "rx/frequency", "rx/modegain", "rx/gain", "rx/sr", "rx/format","rx/mute",
- "tx/frequency", "tx/gain", "tx/sr","tx/format","tx/mute","tx/nco",""};
+char strcmd[][255] = {"listcmd", "rx/frequency", "rx/modegain", "rx/gain", "rx/sr", "rx/format", "rx/mute",
+                      "tx/frequency", "tx/gain", "tx/sr", "tx/format", "tx/mute", "tx/nco", ""};
 enum defidx
 {
     listcmd,
@@ -705,7 +856,7 @@ enum defidx
     cmd_txsr,
     cmd_txformat,
     cmd_txmute,
-     cmd_txnco
+    cmd_txnco
 };
 
 bool publishcmd()
@@ -718,7 +869,7 @@ bool publishcmd()
         strcat(svalue, ",");
     }
     publish("listcmd_ctrl", (char *)svalue);
-    //mosquitto_publish(m_mosq, NULL, "listcmd", strlen(svalue), svalue, 2, false);
+    // mosquitto_publish(m_mosq, NULL, "listcmd", strlen(svalue), svalue, 2, false);
     return true;
 }
 
@@ -730,9 +881,9 @@ void PubTelemetry()
     fgets(sSerial, 255, fdserial);
     fclose(fdserial);
     publish("device", sSerial);
-    //RSSI
+    // RSSI
     publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage0_rssi", "rx/rssi");
-    //AD TEMPERATURE
+    // AD TEMPERATURE
     publishstatus("/sys/bus/iio/devices/iio:device0/in_temp0_input", "temperature_ad");
 
     // Publish complete status by sending cmd with ?
@@ -760,26 +911,26 @@ bool HandleCommand(char *key, char *soriginvalue)
     if (cmdidx == -1)
         return false;
     char svalue[255];
-    //fprintf(stderr,"Handle command %s %s\n",key,svalue);
-     if (toupper(soriginvalue[strlen(soriginvalue) - 1]) == 'M')
+    // fprintf(stderr,"Handle command %s %s\n",key,svalue);
+    if (toupper(soriginvalue[strlen(soriginvalue) - 1]) == 'M')
     {
         soriginvalue[strlen(soriginvalue) - 1] = 0;
         float fvalue = atof(soriginvalue) * 1e6;
-        sprintf(svalue,"%.0f",fvalue);
+        sprintf(svalue, "%.0f", fvalue);
     }
     else if (toupper(soriginvalue[strlen(soriginvalue) - 1]) == 'K')
     {
         soriginvalue[strlen(soriginvalue) - 1] = 0;
         float fvalue = atof(soriginvalue) * 1e3;
-        sprintf(svalue,"%.0f",fvalue);
+        sprintf(svalue, "%.0f", fvalue);
     }
     else
     {
         float fvalue = atof(soriginvalue);
-        if(fvalue!=0)
-            sprintf(svalue,"%.0f",fvalue);
-        else    
-            strcpy(svalue,soriginvalue); // Not a numerical value
+        if (fvalue != 0)
+            sprintf(svalue, "%.0f", fvalue);
+        else
+            strcpy(svalue, soriginvalue); // Not a numerical value
     }
     switch (cmdidx)
     {
@@ -795,14 +946,14 @@ bool HandleCommand(char *key, char *soriginvalue)
         publishstatus("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_frequency", key);
         break;
     }
-   
+
     case cmd_rxmute:
     {
         SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_powerdown", svalue);
         publishstatus("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_powerdown", key);
         break;
     }
-    
+
     case cmd_rxmodegain: // {manual,slow_attack,hybrid,fast_attack}
     {
         if (strcmp(svalue, "?") != 0)
@@ -812,12 +963,12 @@ bool HandleCommand(char *key, char *soriginvalue)
     }
     case cmd_rxgain:
     {
-        //First go to manual gain
+        // First go to manual gain
         if (strcmp(svalue, "?") != 0)
             SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage0_gain_control_mode", "manual");
         publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage0_gain_control_mode", strcmd[cmd_rxmodegain]);
 
-        //THen set manual gain
+        // THen set manual gain
         if (strcmp(svalue, "?") != 0)
             SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage0_hardwaregain", svalue);
         publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage0_hardwaregain", key);
@@ -834,14 +985,14 @@ bool HandleCommand(char *key, char *soriginvalue)
     {
         if (strcmp(svalue, "?") == 0)
         {
-            
-            size_t value = ReadRegister(0x79020000+0xBC);
-            //fprintf(stderr,"Reg %x\n",value);
-            m_format = log2(value&0xE);
+
+            size_t value = ReadRegister(0x79020000 + 0xBC);
+            // fprintf(stderr,"Reg %x\n",value);
+            m_format = log2(value & 0xE);
             publish("rx/format", (float)m_format);
             break;
         }
-        
+
         int requestformat = atoi(svalue);
         m_format = SetFormat(requestformat);
         publish("rx/format", m_format);
@@ -858,14 +1009,26 @@ bool HandleCommand(char *key, char *soriginvalue)
     case cmd_txmute:
     {
         if (strcmp(svalue, "?") != 0)
+        {
             SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", svalue);
+            if (strcmp(svalue, "1")) // ptt off
+            {
+                SendCommand("/sys/kernel/debug/iio/iio:device0/direct_reg_access", "0x26 0x10");
+                SendCommand("/sys/kernel/debug/iio/iio:device0/direct_reg_access", "0x27 0x00");
+            }
+            else // ptt on
+            {
+                SendCommand("/sys/kernel/debug/iio/iio:device0/direct_reg_access", "0x26 0x10");
+                SendCommand("/sys/kernel/debug/iio/iio:device0/direct_reg_access", "0x27 0x50");
+            }
+        }
         publishstatus("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", key);
         break;
     }
 
     case cmd_txsr:
     {
-        ComputeTxSR(svalue);
+        ComputeTxSRDVBS2(svalue);
         break;
     }
 
@@ -878,18 +1041,18 @@ bool HandleCommand(char *key, char *soriginvalue)
     }
     case cmd_txnco:
     {
-        #define NCO_ACCUM_SIZE 28
-        static float m_nco=0;
+#define NCO_ACCUM_SIZE 28
+        static float m_nco = 0;
         if (strcmp(svalue, "?") != 0)
         {
-            m_nco=atof(svalue);
-            fprintf(stderr,"adcdacsr %d\n",m_adcdacsr);
-            //Fixme! NCO is before ad9361 iterpolator : so could be outside of band
-            nco_counter_send_conf("/dev/nco00", m_adcdacsr, m_nco>=0?m_nco:m_adcdacsr+m_nco,
-			      NCO_ACCUM_SIZE, 0, 1, 1); // 0, 1, 1 => offset, PINC HW/SF, POFF HW/SF;
-        } 
-        publish("tx/nco", m_nco);   
-        
+            m_nco = atof(svalue);
+            fprintf(stderr, "adcdacsr %d\n", m_adcdacsr);
+            // Fixme! NCO is before ad9361 iterpolator : so could be outside of band
+            nco_counter_send_conf("/dev/nco00", m_adcdacsr, m_nco >= 0 ? m_nco : m_adcdacsr + m_nco,
+                                  NCO_ACCUM_SIZE, 0, 1, 0); // 0, 1, 1 => offset, PINC HW/SF, POFF HW/SF;
+        }
+        publish("tx/nco", m_nco);
+
         break;
     }
     }
@@ -901,6 +1064,6 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
 {
     m_mosq = mosq;
     sprintf(sDtRoot, "dt/pluto/%s/", sSerial);
-    SendCommand("/sys/bus/iio/devices/iio:device0/calib_mode","manual_tx_quad");
-    //iio_device_attr_write(dev, "calib_mode", "manual_tx_quad");
+    SendCommand("/sys/bus/iio/devices/iio:device0/calib_mode", "manual_tx_quad");
+    // iio_device_attr_write(dev, "calib_mode", "manual_tx_quad");
 }

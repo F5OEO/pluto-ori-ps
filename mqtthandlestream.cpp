@@ -56,6 +56,7 @@
 
 #include "tsinputmux.h"
 #include "gsemux.h"
+#include "iqtofft.h"
 #include <queue>
 
 //#include "mygse/bbheader_sink_impl.h"
@@ -132,7 +133,7 @@ static int m_offset;  // Current offset into the buffer
 size_t m_latency = 20000; // Latency at 80ms by default
 size_t Underflow = 0;
 size_t m_SR = 3000000;
-float m_averagegain=-100.0; // Impossible gain, means not AGC
+float m_averagegain = -100.0; // Impossible gain, means not AGC
 
 int m_sock;
 struct sockaddr_in m_client;
@@ -146,7 +147,8 @@ size_t m_s2sr = 1000000;
 enum
 {
     output_stdout,
-    output_udp
+    output_udp,
+    output_websocket
 };
 size_t typeouput = output_stdout;
 
@@ -161,25 +163,26 @@ enum
     tx_passtrough,
     tx_iq,
     tx_dvbs2_ts,
-    tx_dvbs2_gse
+    tx_dvbs2_gse,
+    tx_test
 
 };
 char s_txmode[255] = "pass";
 int m_txmode = tx_passtrough;
 
-
 // https://github.com/phase4ground/dvb_fpga/blob/master/rtl/inline_config_adapter.vhd
 enum
 {
-    shortframe,
-    longframe = 0x2c
+    longframe ,
+    shortframe
+    
 };
 enum
 {
     mod_qpsk,
-    mod_8psk = 0xB,
-    mod_16apsk = 0x16,
-    mod_32apsk = 0x21
+    mod_8psk = 1,
+    mod_16apsk = 2,
+    mod_32apsk = 3
 };
 enum
 {
@@ -202,17 +205,17 @@ unsigned int BBFrameLenLut[] = {3072, 5232, 6312, 7032, 9552, 10632, 11712, 1243
 typedef struct
 {
     ssize_t size;
-     ssize_t modecod;
+    ssize_t modecod;
     uint8_t bbframe[UDP_BUFF_MAX_BBFRAME];
 } buffer_t;
 
-enum 
+enum
 {
     fec_fix,
     fec_variable
 };
 
-int m_Fecmode=fec_fix;
+int m_Fecmode = fec_fix;
 
 queue<buffer_t *> m_bbframe_queue;
 
@@ -235,6 +238,7 @@ void ResetDVBS2()
 #define switchdest 0x43C20000
 void SetFPGAMode(bool dvbs2)
 {
+    usleep(100000); // Maybe the time I/Q samples don't go to dvbs2
     if (dvbs2)
     {
         WriteRegister(switchsrc + 0x40, 0x00);       // SI0->MI0
@@ -253,6 +257,7 @@ void SetFPGAMode(bool dvbs2)
         WriteRegister(switchdest + 0x40, 0x01); // SI1->MI0
         WriteRegister(switchdest + 0x00, 0x02);
     }
+    
 }
 
 // https://github.com/phase4ground/dvb_fpga/blob/master/third_party/airhdl/dvbs2_encoder_regs.md
@@ -262,6 +267,18 @@ void SetDVBS2Constellation()
     int16_t imap;
     int16_t qmap;
     size_t Reg;
+    //int16_t magqspk=23170;
+    //int16_t magqspk=32000;
+    int16_t magqspk=23170;
+    imap=magqspk;qmap=magqspk;
+    WriteRegister(DVBS2Register + 0x110 + 0, (imap<<16)|qmap&0xFFFF);
+     imap=magqspk;qmap=-magqspk;
+    WriteRegister(DVBS2Register + 0x110 + 4, (imap<<16)|qmap&0xFFFF);
+ imap=-magqspk;qmap=magqspk;
+    WriteRegister(DVBS2Register + 0x110 + 8, (imap<<16)|qmap&0xFFFF);
+ imap=-magqspk;qmap=-magqspk;
+    WriteRegister(DVBS2Register + 0x110 + 12, (imap<<16)|qmap&0xFFFF);
+
     for (size_t i = 0; i < 12; i++)
     {
         size_t Reg = ReadRegister(DVBS2Register + 0x110 + i * 4);
@@ -472,18 +489,18 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     // Change the size of the buffer
     // m_max_len = len;
     char msgerror[255];
- pthread_mutex_lock(&bufpluto_mutextx);
+    //pthread_mutex_lock(&bufpluto_mutextx);
     if (m_txbuf)
     {
         iio_buffer_cancel(m_txbuf);
-       
+
         iio_buffer_destroy(m_txbuf);
-        iio_strerror(errno,msgerror,sizeof(msgerror));
-        fprintf(stderr, "Destroy buffer %s\n",msgerror);
-         iio_channel_disable(m_tx0_i); // Fix the bug https://github.com/analogdevicesinc/libiio/commit/02527e69ab57aa2eac995e964b58421b0f5af5ad
+        iio_strerror(errno, msgerror, sizeof(msgerror));
+        fprintf(stderr, "Destroy buffer %s\n", msgerror);
+        iio_channel_disable(m_tx0_i); // Fix the bug https://github.com/analogdevicesinc/libiio/commit/02527e69ab57aa2eac995e964b58421b0f5af5ad
         iio_channel_disable(m_tx0_q);
-        iio_strerror(errno,msgerror,sizeof(msgerror));
-        fprintf(stderr, "channel disable tx %s\n",msgerror);
+        iio_strerror(errno, msgerror, sizeof(msgerror));
+        fprintf(stderr, "channel disable tx %s\n", msgerror);
         m_txbuf = NULL;
     }
     if (len == 0) // We are in passthrough, don't get the stream because it is used externally
@@ -498,17 +515,17 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     iio_channel_enable(m_tx0_q);
 
     m_txbuf = iio_device_create_buffer(m_tx, len, false);
-    
+
     if (m_txbuf == NULL)
     {
-        iio_strerror(errno,msgerror,sizeof(msgerror));
-        fprintf(stderr, "Could not allocate iio mem tx %s\n",msgerror);
+        iio_strerror(errno, msgerror, sizeof(msgerror));
+        fprintf(stderr, "Could not allocate iio mem tx %s\n", msgerror);
         sleep(10000);
         // exit(1);
     }
 
     iio_buffer_set_blocking_mode(m_txbuf, true);
-pthread_mutex_unlock(&bufpluto_mutextx);
+    //pthread_mutex_unlock(&bufpluto_mutextx);
     /*
     int ret = iio_device_reg_write(m_tx, 0x80000088, 0x4);
     if (ret)
@@ -693,11 +710,9 @@ void *rx_buffer_thread(void *arg)
     udp_set_ip("230.0.0.1:10000", m_iface);
     remove("/dev/rx1");
     mkfifo("/dev/rx1", 0666);
-    fdout = fopen("/dev/rx1", "wb");
-    // For fpga recording
-    // fdout = fopen("/tmp/rxiq", "wb");
-    InitRxChannel(20000);
-
+    //fdout = fopen("/dev/rx1", "wb");
+    InitRxChannel(fftsize*10,2);
+    init_fft(fftsize,30);
     while (true)
     {
 
@@ -758,8 +773,17 @@ void *rx_buffer_thread(void *arg)
             {
                 RxSize = direct_rx_samples(&RxBuffer);
                 udp_send((char *)RxBuffer, RxSize * 2 * sizeof(short));
-                break;
+                
             }
+            break;
+
+            case output_websocket:
+            {
+                RxSize = direct_rx_samples(&RxBuffer);
+                
+                iqtofft(RxBuffer,RxSize);
+            }
+            break;
             }
 
             pthread_mutex_unlock(&buffer_mutexrx);
@@ -780,43 +804,26 @@ void *rx_buffer_thread(void *arg)
 ssize_t write_from_file(FILE *fd, int len)
 {
 
-    /*
-    if(iio_buffer_get_poll_fd(m_txbuf)<0)
+    pthread_mutex_lock(&bufpluto_mutextx);
+    
+    short *buffpluto = (short *)iio_buffer_start(m_txbuf);
+    
+    int Read = fread(buffpluto, 2 * sizeof(short), len, fd);
+    // Fixme : Could have some deadlock here
+     if(m_txmode!=tx_iq) 
     {
-            fprintf(stderr,"Full\n");
+        fprintf(stderr,"mode has changed \n");
+        pthread_mutex_unlock(&bufpluto_mutextx);
+        return 0;
     }
-    */
-    int nout;
-    /*
-   do
-   {
-        ioctl(fileno(fd), FIONREAD, &nout);
-   }
-   while(nout<2*BufferLentx*sizeof(short));
-   */
-    /*
-      int res=ioctl(fileno(fd), FIONREAD, &nout);
-      if(res<0) return -1;
-
-      if (nout < 2 * len * sizeof(short))
-          return 0;
-          */
-    short *buffpluto = (short *)iio_buffer_first(m_txbuf, m_tx0_i);
-    buffpluto[0] = 0x00;
-    buffpluto[1] = 0;
-    int Read = fread(&(buffpluto[2]), 2 * sizeof(short), len - 1, fd);
-    // int Read = fread(buffpluto, 2 * sizeof(short),len, fd);
-    if (Read != len - 1)
+    if (Read != len )
     {
         fprintf(stderr, "Only read %d / %d\n", Read, len);
         return Read;
     }
 
-    // int sent=iio_buffer_push_partial(m_txbuf,Read);
-    size_t sent = iio_buffer_push(m_txbuf);
-    fprintf(stderr, "*");
-    fflush(stderr);
-
+    int sent=iio_buffer_push_partial(m_txbuf,Read);
+    
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
     if (val & 1)
@@ -825,27 +832,27 @@ ssize_t write_from_file(FILE *fd, int len)
         fflush(stderr);
         iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
     }
-
+    pthread_mutex_unlock(&bufpluto_mutextx);
     return sent;
 }
 
 ssize_t write_from_buffer(short *Buffer, int len)
 {
-    /*
-    static int old_len=0;
-    if(old_len!=len)
+    pthread_mutex_lock(&bufpluto_mutextx);
+     if(m_txmode!=tx_test) 
     {
-        iio_buffer_destroy(m_txbuf);
-        m_txbuf = iio_device_create_buffer(m_tx, len, false);
-        old_len=len;
+        fprintf(stderr,"mode has changed \n");
+        pthread_mutex_unlock(&bufpluto_mutextx);
+        return 0;
     }
-    */
-    // iio_buffer_set_data(m_tx,Buffer);
-
     short *buffpluto = (short *)iio_buffer_start(m_txbuf);
+    //fprintf(stderr, "buffpluto %x Buffer %x\n",buffpluto,Buffer);
     memcpy(buffpluto, Buffer, 2 * sizeof(short) * len);
-
+    //fprintf(stderr, "*\n");
+   
     size_t sent = iio_buffer_push_partial(m_txbuf, len);
+    //fprintf(stderr, "!\n");
+    pthread_mutex_unlock(&bufpluto_mutextx);
     // size_t sent = iio_buffer_push(m_txbuf);
     // fprintf(stderr, "*");
     // fflush(stderr);
@@ -860,12 +867,12 @@ ssize_t write_from_buffer(short *Buffer, int len)
     return sent;
 }
 
-
 unsigned char m_ModCode = C2_3 + longframe;
 unsigned int m_BBFrameLenBit = 0;
 unsigned char m_CodeRate = 0xFF; // OxFF means not initialized
 unsigned char m_CodeConstel = 0; // QPSK
 unsigned char m_CodeFrame = longframe;
+unsigned char m_Pilots = 0;
 ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len, bool reset);
 ssize_t write_byte_from_buffer_split(unsigned char *Buffer, int len, bool reset);
 
@@ -913,32 +920,57 @@ typedef struct
     uint32_t output_format; // dummy_frame in DATV-Express
 } DVB2FrameFormat;
 
-void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
+unsigned char  getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate,uint Pilots)
+{
+    unsigned char NewModCode;
+    
+    if(CodeRate >10 ) CodeRate=10;
+    if(Constellation==mod_qpsk)
+    {
+         NewModCode = CodeRate+1;
+    }
+    if(Constellation==mod_8psk)
+    {
+        unsigned char Tab8PSK[]={12,12,12,12,12,13,14,15,15,16,17};
+         NewModCode = Tab8PSK[CodeRate];
+    }
+    if(Constellation==mod_16apsk)
+    {
+        unsigned char Tab16APSK[]={18,18,18,18,18,18,19,20,21,22,23};
+         NewModCode = Tab16APSK[CodeRate];
+    }
+    if(Constellation==mod_32apsk)
+    {
+        unsigned char Tab32APSK[]={24,24,24,24,24,24,24,25,26,27,28};
+        NewModCode = Tab32APSK[CodeRate];
+    }
+    NewModCode|=(Pilots&1)<<5; // No pilots
+    if(FrameType==longframe)
+         NewModCode|=0<<6; // Longframe 
+    else
+        NewModCode|=1<<6; // Longframe 
+
+    return  NewModCode;   
+}
+
+void SetModCode(uint FrameType, uint Constellation, uint CodeRate,uint Pilots)
 {
     static char OldModCode = 0xFF;
     if (CodeRate == 0xFF)
         return;
-    if (BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate] % 32 != 0)
-    {
-        // fprintf(stderr, "Info : Modcod is not 32 bits aligned !!!! \n");
-    }
-
-    unsigned char NewModCode = FrameType + Constellation + CodeRate;
+   
+    unsigned char NewModCode = getdvbs2modcod(FrameType,Constellation,CodeRate,Pilots);
 
     if (NewModCode != OldModCode)
     {
-           fprintf(stderr, "Frame %d Constellation %d CodeRate %d\n", FrameType,Constellation,CodeRate);  
+        fprintf(stderr, "Frame %d Constellation %d CodeRate %d Pilots %d\n", FrameType, Constellation, CodeRate,Pilots);
         // write_byte_from_buffer_burst(NULL, 0, true);
         //  write_byte_from_buffer_split(NULL, 0, true); // Done prior because m_code is still used
-        if (BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate] == 0)
-        {
-            fprintf(stderr, "Coderate illegal\n");
-            return;
-        }
-        m_BBFrameLenBit = BBFrameLenLut[(FrameType == 0 ? 0 : 11) + CodeRate];
        
-        //m_ModCode = NewModCode;
-        //OldModCode = m_ModCode;
+        m_BBFrameLenBit = BBFrameLenLut[(FrameType == shortframe ? 0 : 11) + CodeRate];
+
+        // m_ModCode = NewModCode;
+        // OldModCode = m_ModCode;
         OldModCode = NewModCode;
         fprintf(stderr, "Modcode = %x Coderate %d Len (bit) = %d Len (Byte) = %d \n", NewModCode, CodeRate, m_BBFrameLenBit, m_BBFrameLenBit / 8);
 
@@ -946,151 +978,13 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate)
             // int status = dvbs2neon_control(STREAM0, CONTROL_SET_OUTPUT_BUFFER, (uint32)BBFrameNeonBuff, 0); // CONTROL_SET_OUTPUT_BUFFER
             //  fprintf(stderr, "Status %d \n", status);
         }
-        setneonmodcod(Constellation, CodeRate, FrameType);
-         //fprintf(stderr, "modocodgse  %d \n", (FrameType == 0 ? 0 : 11) + CodeRate);
-        setgsemodcod(Constellation, CodeRate, FrameType);
+        setneonmodcod(Constellation, CodeRate, FrameType,Pilots);
+        // fprintf(stderr, "modocodgse  %d \n", (FrameType == 0 ? 0 : 11) + CodeRate);
+        setgsemodcod(Constellation, CodeRate, FrameType,Pilots);
         // fprintf(stderr, "Status dvbs2neon_control %d \n", status);
     }
 }
 
-/*
-it should be OK if the frame is not multiple of the AXI stream data width, the width converters should handle that, but for some reason that doesn't seem to be happening
-as for sending less than BB frame, every chunk of data needs the AXI metadata at the start, even if it's a continuation of a prev frame.
-For example, if the BB frame is 256 bytes, an entire frame would have 260 bytes (256 bytes of data + 4 bytes of metadata at the start)
-If you send 200 bytes for example, the first 4 bytes will be used as metadata and the remaining 196 bytes will be sent to the encoding process. If you send another 200 bytes, the same thing happens: the first 4 bytes will be taken off and assigned to the metadata and the remaining 196 bytes will be sent to the encoding process.
-So, at the end of sending 2 * 200 bytes, the encoder will have received 196*2 = 392 bytes, which is 1 BB frame of 256 bytes and 136 extra bytes that will be encoded in the next frame. The 256 bytes will use the encoding set in by the  first 4 bytes of the first 200 byte frame wile the following 136 bytes will be encoded using the first 4 bytes of the 2nd 200 byte frame
-
-
-
-
-
-19 h 45
-All in all, I think having the metadata at the start of the data stream is good if we have multiple streams, each one using potentially a different config (for example stream A has good SNR so we can use 9/10 and stream B has bad SNR so we prefer using 1/4)
-If we have a single stream, we can move the metadata to be set via AXI lite and send data in whatever size we want. The new config will be used in the next frame
-
-Coderate Sentbytes inputbeats
-0   8008    8004
-1   2680    2676
-2   3220    3212 !!! /4 -> impair , non diviosble par 8
-3   8056    8052
-4   4840    4836
-5   5384    5380
-6   12016   12012
-7   6460    6452 !!! /4 impair
-8   13464   13460
-9   7188    7180 !!! /4 impair
-10  14552   14548
-
-
-
- ---> Go to split method with %8 and add metadata at each chunk
-Registers :
- https://github.com/phase4ground/dvb_fpga/blob/master/third_party/airhdl/dvbs2_encoder_regs.md
-*/
-
-ssize_t write_byte_from_buffer_burst(unsigned char *Buffer, int len, bool reset)
-{
-    static int cur_idx = 4;
-    if (reset)
-    {
-        cur_idx = 4;
-
-        return 0;
-    }
-    // unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
-    unsigned char *buffpluto = (unsigned char *)iio_buffer_first(m_txbuf, m_tx0_i);
-    buffpluto[0] = m_ModCode;
-    buffpluto[1] = 0;
-    buffpluto[2] = 0;
-    buffpluto[3] = 0;
-
-    memcpy(buffpluto + cur_idx, Buffer, len);
-
-    cur_idx += len;
-    size_t sent = 0;
-    if (cur_idx % 4 == 0) // %4 should work but seems %8 should fix
-    {
-// while(ReadRegister(0x43C10008)>=1) ;
-// fprintf(stderr,"Depth %d\n",ReadRegister(0x43C10008));
-#ifdef DEBUGFRAME
-        for (int i = 0; i < len; i++)
-        {
-
-            if (i % 16 == 0)
-                fprintf(stderr, "\n%.4x ", i);
-            fprintf(stderr, "%.2x ", Buffer[i]);
-        }
-        fprintf(stderr, "\n");
-#endif
-        sent = iio_buffer_push_partial(m_txbuf, cur_idx / 4);
-        // system("./regs.sh");
-        cur_idx = 4;
-
-        uint32_t val = 0;
-        int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
-        if (val & 1)
-        {
-            fprintf(stderr, "@");
-            fflush(stderr);
-            iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
-        }
-        // fprintf(stderr,"*");fflush(stderr);
-    }
-    else
-    {
-        /*buffpluto[cur_idx] = m_ModCode;
-        buffpluto[cur_idx+1] = 0;
-        buffpluto[cur_idx+2] = 0;
-        buffpluto[cur_idx+3] = 0;
-        cur_idx += 4; // AXI metadata*/
-        // fprintf(stderr,"curidx %d mod %d\n",cur_idx,cur_idx%4);fflush(stderr);
-        sent = 0;
-    }
-
-    return sent;
-}
-
-ssize_t write_byte_from_buffer_burstpatch(unsigned char *Buffer, int len, bool reset)
-{
-    struct timespec start, now;
-    if (reset == 1)
-        return 0;
-
-    unsigned int LazyLut[] = {7, 6, 5, 4, 3, 2, 1, 0};
-    unsigned int IdxStart = LazyLut[(len + 4) % 8];
-
-    unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
-    // unsigned char *buffpluto = (unsigned char *)iio_buffer_first(m_txbuf, m_tx0_i);
-    // unsigned int IdxStart=(len%4+3)%4;
-
-    // fprintf(stderr,"BBLen %d IdexStart %d len+4+IdxStart+1 %d (len+IdxStart+1+4)mod8 %d\n",len,IdxStart,(len+IdxStart+1+4),(len+4+IdxStart+1)%8);
-    ssize_t sent = 0;
-    // Normal behavior
-
-    memset(buffpluto, 0, 4); // Idx = len -1
-    buffpluto[0] = m_ModCode;
-    memcpy(buffpluto + 4, Buffer, len);
-
-    if ((len + 4 + IdxStart + 1) % 8 != 0)
-        fprintf(stderr, "len %d is not mod 8\n", len + 4 + IdxStart + 1);
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    sent = iio_buffer_push_partial(m_txbuf, (len + 4 + IdxStart + 1) / 4);
-    clock_gettime(CLOCK_MONOTONIC, &now);
-
-    size_t diff_us = (now.tv_sec - start.tv_sec) * 1000000L;
-    diff_us += (now.tv_nsec - start.tv_nsec) / 1000L;
-    // fprintf(stderr,"Diff %u \n",diff_us);
-    uint32_t val = 0;
-    int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
-    if (val & 1)
-    {
-        fprintf(stderr, "@");
-        fflush(stderr);
-        iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
-    }
-
-    return sent;
-}
 bool SendCommand(char *skey, char *svalue);
 
 ssize_t write_bbframe()
@@ -1098,8 +992,6 @@ ssize_t write_bbframe()
     struct timespec start, now;
 
     unsigned int LazyLut[] = {7, 6, 5, 4, 3, 2, 1, 0};
-
-    
 
     ssize_t sent = 0;
     // Normal behavior
@@ -1109,50 +1001,62 @@ ssize_t write_bbframe()
     unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
     buffer_t *newbuf = m_bbframe_queue.front();
     ssize_t len = newbuf->size;
-    unsigned int IdxStart = LazyLut[(len + 4) % 8];
+    unsigned int IdxStart = LazyLut[(len + 2) % 8];
 
-    memset(buffpluto, 0, 4); // Idx = len -1
-    //buffpluto[0] = m_ModCode;
-    
-    
+    memset(buffpluto, 0, 2); // Idx = len -1
+   
+    //buffpluto[0] = newbuf->modecod;
+     buffpluto[0]=0xB8;
+     buffpluto[1]=newbuf->modecod;
+     /*
+    if(newbuf->modecod>=longframe)
+    {
+        buffpluto[1]=(newbuf->modecod-longframe+1);
+        buffpluto[1]|=0<<5; // No pilots
+        buffpluto[1]|=0<<6; // Longframe   
+    }
+    else
+    {
+        buffpluto[1]=(newbuf->modecod+1);
+        buffpluto[1]|=1<<5; // No pilots
+        buffpluto[1]|=1<<6; // SHortframe   
+    }*/
 
-    buffpluto[0]=newbuf->modecod;
-    memcpy(buffpluto + 4, newbuf->bbframe, newbuf->size);
+    //fprintf(stderr,"Warning : fec %d short = %d\n",buffpluto[1]&0x1F,buffpluto[1]>>5);
+    memcpy(buffpluto + 2, newbuf->bbframe, newbuf->size);
     free(newbuf);
     m_bbframe_queue.pop();
     pthread_mutex_unlock(&buffer_mutextx);
-    if(BBFrameLenLut[buffpluto[0]-0x2c+11]/8!=len)
+    if (BBFrameLenLut[buffpluto[1] ] / 8 != len)
     {
-        //fprintf(stderr,"Warning : modcod %x bbfram len %d len %d\n",buffpluto[0],BBFrameLenLut[buffpluto[0]-0x2c+11]/8,len);
-        //return 0;
+        // fprintf(stderr,"Warning : modcod %x bbfram len %d len %d\n",buffpluto[0],BBFrameLenLut[buffpluto[0]-0x2c+11]/8,len);
+        // return 0;
     }
-    if ((len + 4 + IdxStart + 1) % 8 != 0)
-        fprintf(stderr, "len %d is not mod 8\n", len + 4 + IdxStart + 1);
+    if ((len + 2 + IdxStart + 1) % 8 != 0)
+        fprintf(stderr, "len %d is not mod 8\n", len + 2 + IdxStart + 1);
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-
-
-if(m_averagegain>-90.0)
+    if (m_averagegain > -90.0)
     {
-        static float TheoricMER[]={0,-2.4,-1.2,0,1.0,2.2,3.2,4.0,4.6,5.2,6.2,6.5,5.5,6.6,7.9,9.4,10.6,11.0,9.0,10.2,11.0,11.6,12.9,13.1,12.6,13.6,14.3,15.7,16.1};
-        float offsetgain=TheoricMER[buffpluto[0]-0x2c+11];
-        if(offsetgain+m_averagegain<-20)
+        static float TheoricMER[] = {0, -2.4, -1.2, 0, 1.0, 2.2, 3.2, 4.0, 4.6, 5.2, 6.2, 6.5, 5.5, 6.6, 7.9, 9.4, 10.6, 11.0, 9.0, 10.2, 11.0, 11.6, 12.9, 13.1, 12.6, 13.6, 14.3, 15.7, 16.1};
+        float offsetgain = TheoricMER[buffpluto[0] - 0x2c + 11];
+        if (offsetgain + m_averagegain < -20)
         {
             char svalue[255];
-            sprintf(svalue,"%f",offsetgain+m_averagegain);
-            fprintf(stderr,"Offset %f Gain %s for modcod %d\n",offsetgain,svalue,buffpluto[0]);
+            sprintf(svalue, "%f", offsetgain + m_averagegain);
+            fprintf(stderr, "Offset %f Gain %s for modcod %d\n", offsetgain, svalue, buffpluto[0]);
             SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
         }
         else
         {
-            fprintf(stderr,"Too much gain offset %f %f\n",offsetgain,offsetgain+m_averagegain);
-        }    
-    }    
+            fprintf(stderr, "Too much gain offset %f %f\n", offsetgain, offsetgain + m_averagegain);
+        }
+    }
 
-    sent = iio_buffer_push_partial(m_txbuf, (len + 4 + IdxStart + 1) / 4);
-pthread_mutex_unlock(&bufpluto_mutextx);
+    sent = iio_buffer_push_partial(m_txbuf, (len + 2 + IdxStart + 1) / 4);
+    pthread_mutex_unlock(&bufpluto_mutextx);
     // AGC TX Gain
-    
+
     clock_gettime(CLOCK_MONOTONIC, &now);
 
     size_t diff_us = (now.tv_sec - start.tv_sec) * 1000000L;
@@ -1171,131 +1075,6 @@ pthread_mutex_unlock(&bufpluto_mutextx);
 }
 
 
-
-ssize_t WriteTestBBFrame()
-{
-    static unsigned char *TestBBFrame = (unsigned char *)malloc(58192 * 8 / 8);
-    static unsigned char GSEHeader[] = {0x40, 0x01, 0x00, 0x00, 0x96, 0xd0, 0xee, 0xcc, 0xcc, 0xe7}; // FEC 3/5
-    int headerlen = sizeof(GSEHeader);
-    memcpy(TestBBFrame, GSEHeader, headerlen);
-    for (size_t i = headerlen; i < m_BBFrameLenBit / 8; i++)
-    {
-        TestBBFrame[i] = i % 256;
-    }
-
-    TestBBFrame[0] = 0x70; // Single /ACM -> MultiSTream have to be studied : not well received ACM also
-    TestBBFrame[1] = 0x0;  // MATYPE2
-    TestBBFrame[2] = 0;    // UPL
-    TestBBFrame[3] = 0;    // UPL
-    TestBBFrame[4] = 0;    // DFL
-    TestBBFrame[5] = 0;    // DFL
-    TestBBFrame[6] = 0;    // SYNC
-    TestBBFrame[7] = 0;    // SYNCD
-    TestBBFrame[8] = 0;    // SYNCD
-    TestBBFrame[9] = calc_crc8(TestBBFrame, 9);
-
-    return write_byte_from_buffer_burstpatch(TestBBFrame, m_BBFrameLenBit / 8, false);
-    // return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
-}
-ssize_t WriteDummyTSBBFrame()
-{
-    static unsigned char *TestBBFrame = (unsigned char *)malloc(58192 * 8 / 8);
-    static unsigned char GSEHeader[] = {0x40, 0x01, 0x00, 0x00, 0x96, 0xd0, 0xee, 0xcc, 0xcc, 0xe7}; // FEC 3/5
-    int headerlen = sizeof(GSEHeader);
-    memcpy(TestBBFrame, GSEHeader, headerlen);
-    for (size_t i = headerlen; i < m_BBFrameLenBit / 8; i++)
-    {
-        TestBBFrame[i] = i % 256;
-    }
-
-    TestBBFrame[0] = 0xC0; // Single /ACM -> MultiSTream have to be studied : not well received ACM also
-    TestBBFrame[1] = 0x0;  // MATYPE2
-    TestBBFrame[2] = 0x05; // UPL
-    TestBBFrame[3] = 0xE0; // UPL
-    TestBBFrame[4] = 0x59; // DFL
-    TestBBFrame[5] = 0xBC; // DFL
-    TestBBFrame[6] = 0x47; // SYNC
-    TestBBFrame[7] = 0;    // SYNCD
-    TestBBFrame[8] = 0;    // SYNCD
-    TestBBFrame[9] = calc_crc8(TestBBFrame, 9);
-
-    return write_byte_from_buffer_burstpatch(TestBBFrame, m_BBFrameLenBit / 8, false);
-    // return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
-}
-
-ssize_t WriteReadBBFrame()
-{
-    static unsigned char *TestBBFrame = (unsigned char *)malloc(58192 / 8 * 4);
-    int Read = fread(TestBBFrame, 1, m_BBFrameLenBit / 8, fdin);
-    if (Read < m_BBFrameLenBit / 8)
-    {
-        fseek(fdin, 0, SEEK_SET);
-        fread(TestBBFrame, 1, m_BBFrameLenBit / 8, fdin);
-        fprintf(stderr, "Wrap\n");
-    }
-    return write_byte_from_buffer_burstpatch(TestBBFrame, m_BBFrameLenBit / 8, false);
-    // return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
-}
-
-/*
-ssize_t WriteTestTS(bool fpga)
-{
-
-    unsigned char NullPacket[188] = {0x47, 0x1F, 0xFE, 0x10, 'F', '5', 'O', 'E', 'O'};
-     for(int i=9;i<188;i++)
-        NullPacket[i]=i;
-    unsigned char *bbframeptr = NULL;
-    size_t packet = 0;
-    static unsigned char cc = 0;
-    while (bbframeptr == NULL)
-    {
-        NullPacket[3] = 0x10 + cc;
-        cc = (cc + 1) % 16;
-        bbframeptr = (unsigned char *)dvbs2neon_packet(0, (uint32)(NullPacket), 0);
-        packet++;
-    }
-    // fprintf(stderr, " Get symbols after %d packets \n",packet);
-    if (fpga)
-    {
-        bbframeptr = (unsigned char *)dvbs2neon_control(STREAM0, CONTROL_GET_LAST_BBFRAME, (uint32)BBFrameNeonBuff, 0);
-
-        unsigned short *p16 = (unsigned short *)bbframeptr;
-        unsigned short ByteCount = p16[-1];
-        uchar *p8 = (uchar *)bbframeptr;
-        uchar output_format = p8[-3];
-        uchar fec = p8[-5];
-        uchar frame_type = p8[-7];
-        //#define DEBUG_BB
-#ifdef DEBUG_BB
-        static int count=0;
-        for(int i=0;i<  m_BBFrameLenBit / 8;i++)
-          fprintf(stderr,"%02x ", bbframeptr[i]);
-          fprintf(stderr,"\n********************************************************************\n");
-          if(count++==2)          exit(1);
-          #endif
-        // fprintf(stderr, " Get BBframe of len %d/%d outputformat %d fec %d frametype %d \n",  ByteCount, m_BBFrameLenBit / 8, output_format, fec, frame_type);
-        if (ByteCount != m_BBFrameLenBit / 8)
-            fprintf(stderr, "BBFrame len mismatch fpga %d dvbneon %d\n", ByteCount, m_BBFrameLenBit / 8);
-
-
-
-        // fprintf(stderr,"CRC %x/%x \n",calc_crc8(bbframeptr,9),bbframeptr[9]);
-        return write_byte_from_buffer_burstpatch(bbframeptr, ByteCount, false);
-    }
-    else
-    {
-        static sfcmplx *Frame = (sfcmplx *)malloc(144000 * sizeof(sfcmplx));
-        unsigned short *p16 = (unsigned short *)bbframeptr;
-        unsigned short ByteCount = p16[-1];
-        for (int n = 0; n < ByteCount; n++)
-            Frame[n] = symbol_lut[bbframeptr[n]];
-        return write_from_buffer((short *)Frame, ByteCount);
-    }
-
-    // return write_byte_from_buffer_burst(bbf23,m_BBFrameLenBit/8, false);
-    //  return write_byte_from_buffer_split(TestBBFrame,m_BBFrameLenBit/8,false);
-}
-*/
 
 void *tx_buffer_fill_thread(void *arg)
 {
@@ -1330,7 +1109,7 @@ void *tx_buffer_fill_thread(void *arg)
         buffer_t *newbuf = (buffer_t *)malloc(sizeof(buffer_t));
         // newbuf->size = recv(bbframesock, newbuf->bbframe, UDP_BUFF_MAX_BBFRAME, MSG_ZEROCOPY);
         newbuf->size = recv(bbframesock, newbuf->bbframe, UDP_BUFF_MAX_BBFRAME, 0);
-        newbuf->modecod=m_ModCode;
+        newbuf->modecod = m_ModCode;
         fprintf(stderr, "recv udp %d\n", newbuf->size);
         pthread_mutex_lock(&buffer_mutextx);
         if (m_bbframe_queue.size() > MAX_QUEUE_ITEM)
@@ -1341,37 +1120,36 @@ void *tx_buffer_fill_thread(void *arg)
             m_bbframe_queue.pop();
         }
         m_bbframe_queue.push(newbuf);
-         if(m_Fecmode==fec_variable)
-         {
-            
-         }
+        if (m_Fecmode == fec_variable)
+        {
+        }
         pthread_mutex_unlock(&buffer_mutextx);
     }
 }
 
-void GetInterfaceip(char *if_name,char *ip)
+void GetInterfaceip(char *if_name, char *ip)
 {
     struct ifreq ifr;
-size_t if_name_len=strlen(if_name);
-if (if_name_len<sizeof(ifr.ifr_name)) {
-    memcpy(ifr.ifr_name,if_name,if_name_len);
-    ifr.ifr_name[if_name_len]=0;
-} 
+    size_t if_name_len = strlen(if_name);
+    if (if_name_len < sizeof(ifr.ifr_name))
+    {
+        memcpy(ifr.ifr_name, if_name, if_name_len);
+        ifr.ifr_name[if_name_len] = 0;
+    }
 
-int fd=socket(AF_INET,SOCK_DGRAM,0);
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
 
-ioctl(fd,SIOCGIFADDR,&ifr);
-close(fd);
-struct sockaddr_in* ipaddr = (struct sockaddr_in*)&ifr.ifr_addr;
-printf("IP address: %s\n",inet_ntoa(ipaddr->sin_addr));
-strcpy(ip,inet_ntoa(ipaddr->sin_addr));
-
+    ioctl(fd, SIOCGIFADDR, &ifr);
+    close(fd);
+    struct sockaddr_in *ipaddr = (struct sockaddr_in *)&ifr.ifr_addr;
+    printf("IP address: %s\n", inet_ntoa(ipaddr->sin_addr));
+    strcpy(ip, inet_ntoa(ipaddr->sin_addr));
 }
 
 void SetTxMode(int Mode)
 {
-    pthread_mutex_lock(&buffer_mutextx);
-
+    pthread_mutex_lock(&bufpluto_mutextx);
+    
     switch (Mode)
     {
     case tx_passtrough:
@@ -1381,46 +1159,47 @@ void SetTxMode(int Mode)
     }
     break;
     case tx_iq:
+    case tx_test:
     {
         int LatencyMicro = 20000;                    // 20 ms buffer
         BufferLentx = LatencyMicro * (m_SRtx / 1e6); // 12 because FFT transform
-        InitTxChannel(BufferLentx,2);
+        InitTxChannel(BufferLentx, 2);
+        SetFPGAMode(false);
     }
     break;
     case tx_dvbs2_ts:
     {
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        InitTxChannel(BufferLentx, 1);
+        InitTxChannel(BufferLentx, 2);
         SetFPGAMode(true);
         ResetDVBS2();
         SetDVBS2Constellation();
-        /*
-        char ip[255];
-        GetInterfaceip("eth0",ip);
-        init_tsmux("230.10.0.1:1234", ip);
-        */
-        
     }
     break;
     case tx_dvbs2_gse:
     {
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        
-        InitTxChannel(BufferLentx, 1);
+
+        InitTxChannel(BufferLentx, 2);
         SetFPGAMode(true);
         ResetDVBS2();
         SetDVBS2Constellation();
-        /*
-        char ip[255];
-        GetInterfaceip("eth0",ip);
-        init_gsemux("230.0.0.2:1234",ip,"44.0.0.2",20000);
-        */
-        
     }
     break;
     }
     m_txmode = Mode;
-    pthread_mutex_unlock(&buffer_mutextx);
+    fprintf(stderr,"Change mode %d\n",m_txmode);
+   
+    uint32_t val = 0;
+    int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
+    while((val & 1) ==0)
+    {
+        fprintf(stderr,"Wait for purging\n");
+        usleep(1000);
+         iio_device_reg_read(m_tx, 0x80000088, &val);
+    }
+   iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits 
+    pthread_mutex_unlock(&bufpluto_mutextx);
 }
 
 void *tx_buffer_thread(void *arg)
@@ -1431,9 +1210,7 @@ void *tx_buffer_thread(void *arg)
     int64_t time_first, current_time;
     time_first = _timestamp_ns();
 
-
     pthread_mutex_init(&buffer_mutextx, NULL);
-    
 
     // udp_init();
     // strcpy(m_iface, "127.0.0.1");
@@ -1445,12 +1222,6 @@ void *tx_buffer_thread(void *arg)
         fprintf(stderr, "Tx Pipe error\n");
 
     // InitTxChannel(20000);
-    short *Tone = (short *)malloc(BufferLentx * 2 * sizeof(short));
-    for (size_t i = 0; i < BufferLentx; i++)
-    {
-        Tone[i * 2] = 0X7FFF;
-        Tone[i * 2 + 1] = 0;
-    }
 
     short *Noise = (short *)malloc(BufferLentx * 2 * sizeof(short));
     for (int i = 0; i < BufferLentx; i++)
@@ -1461,16 +1232,17 @@ void *tx_buffer_thread(void *arg)
 
     int testcoderate = 0;
 
-     char ip[255];
-     GetInterfaceip("eth0",ip);
-     init_tsmux("230.10.0.1:1234", ip);
-     init_gsemux("230.0.0.2:1234",ip,"44.0.0.2",20000);
+    char ip[255];
+    GetInterfaceip("eth0", ip);
+    //init_tsmux("230.10.0.1:1234", ip);
+    init_tsmux("230.10.0.1:1234", ip);
+    init_gsemux("230.0.0.2:1234", ip, "44.0.0.2", 20000);
     while (true)
     {
 
         if (RunTx)
         {
-
+            
             switch (m_txmode)
             {
 
@@ -1479,19 +1251,18 @@ void *tx_buffer_thread(void *arg)
             {
                 if (m_CodeRate == 0xFF)
                     break;
-            /*
-                if(m_bbframe_queue.size()>2)
-                {    
-                    SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate+m_bbframe_queue.size()/4);
-                }
-                else
-                */    
-                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate);
+                /*
+                    if(m_bbframe_queue.size()>2)
+                    {
+                        SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate+m_bbframe_queue.size()/4);
+                    }
+                    else
+                    */
+                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate,m_Pilots);
                 if (!m_bbframe_queue.empty())
                 {
 
                     write_bbframe();
-                    
                 }
                 else // No more data : need padding
                 {
@@ -1500,7 +1271,7 @@ void *tx_buffer_thread(void *arg)
                         setpaddingts();
                     else
                         setpaddinggse();
-                        //WriteTestBBFrame();
+                    // WriteTestBBFrame();
                 }
             };
             break;
@@ -1511,39 +1282,59 @@ void *tx_buffer_thread(void *arg)
             break;
             case tx_iq:
             {
+                write_from_file(fdin,BufferLentx);
+            };
+            break;
+            case tx_test:
+            {
+                static short *Tone = NULL;
+                if (Tone == NULL)
+                {
+                    Tone = (short *)malloc(BufferLentx * 2 * sizeof(short));
+                      fprintf(stderr,"Init Tone  %d\n",BufferLentx);
+                    for (size_t i = 0; i < BufferLentx; i++)
+                    {
+                        Tone[i * 2] = 0x7FFF;
+                        Tone[i * 2 + 1] = -0x7FF00;
+                    }
+                }
+                //fprintf(stderr,"Tone  %d\n",BufferLentx);
+                write_from_buffer(Tone, BufferLentx);
             };
             break;
             }
+            
         }
         else
         {
             usleep(m_latency);
         }
+
     }
 
     return NULL;
 }
 
-bool publish(char *mqttkey, float value,bool isstatus=true)
+bool publish(char *mqttkey, float value, bool isstatus = true)
 {
     char svalue[255];
     sprintf(svalue, "%.0f", value);
     char pubkey[255];
-    if(isstatus)
+    if (isstatus)
         sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-    else    
+    else
         sprintf(pubkey, "%s%s", sCmdRoot, mqttkey);
     // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
     mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
     return true;
 }
 
-bool publish(char *mqttkey, char *svalue,bool isstatus=true)
+bool publish(char *mqttkey, char *svalue, bool isstatus = true)
 {
     char pubkey[255];
-    if(isstatus)
+    if (isstatus)
         sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
-    else    
+    else
         sprintf(pubkey, "%s%s", sCmdRoot, mqttkey);
     // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
     mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
@@ -1595,8 +1386,8 @@ bool SendCommand(char *skey, char *svalue)
 
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
-                      "tx/dvbs2/coderate", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/sr","tx/dvbs2/agcgain",
-                       "tx/dvbs2/fecmode", ""};
+                      "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots","tx/dvbs2/sr", "tx/dvbs2/agcgain",
+                      "tx/dvbs2/fecmode", ""};
 enum defidx
 {
     listcmd,
@@ -1607,9 +1398,10 @@ enum defidx
     cmd_rxstreamaverage,
     cmd_txstreamrun,
     cmd_txstreammode,
-    cmd_txdvbs2coderate,
+    cmd_txdvbs2fec,
     cmd_txdvbs2constellation,
     cmd_txdvbs2frame,
+    cmd_txdvbs2pilots,
     cmd_txdvbs2sr,
     cmd_txdvbs2averagegain,
     cmd_txdvbs2fecmode
@@ -1806,7 +1598,17 @@ bool HandleCommand(char *key, char *svalue)
             {
                 SetTxMode(tx_iq);
                 publish("tx/stream/mode", s_txmode);
-                strcpy(s_txmode,svalue);
+                strcpy(s_txmode, svalue);
+            }
+            break;
+        }
+        if ((strcmp(svalue, "test") == 0))
+        {
+            if (m_txmode != tx_test)
+            {
+                SetTxMode(tx_test);
+                publish("tx/stream/mode", s_txmode);
+                strcpy(s_txmode, svalue);
             }
             break;
         }
@@ -1816,7 +1618,7 @@ bool HandleCommand(char *key, char *svalue)
             {
 
                 SetTxMode(tx_passtrough);
-                strcpy(s_txmode,svalue);
+                strcpy(s_txmode, svalue);
                 publish("tx/stream/mode", s_txmode);
             }
             break;
@@ -1827,7 +1629,7 @@ bool HandleCommand(char *key, char *svalue)
             {
 
                 SetTxMode(tx_dvbs2_ts);
-                strcpy(s_txmode,svalue);
+                strcpy(s_txmode, svalue);
                 publish("tx/stream/mode", s_txmode);
             }
             break;
@@ -1838,7 +1640,7 @@ bool HandleCommand(char *key, char *svalue)
             {
 
                 SetTxMode(tx_dvbs2_gse);
-                strcpy(s_txmode,svalue);
+                strcpy(s_txmode, svalue);
                 publish("tx/stream/mode", s_txmode);
             }
             break;
@@ -1846,15 +1648,44 @@ bool HandleCommand(char *key, char *svalue)
 
         break;
     }
-    case cmd_txdvbs2coderate:
+
+    case cmd_txdvbs2fec:
     {
+        const char TabFec[][255] = {"1/4", "1/3", "2/5", "1/2", "3/5", "2/3", "3/4", "4/5", "5/6", "8/9", "9/10"};
         if (strcmp(svalue, "?") == 0)
         {
-            publish("tx/dvbs2/coderate", m_CodeRate);
+            if (m_CodeRate < 11)
+                publish("tx/dvbs2/fec", TabFec[m_CodeRate]);
+            else
+                publish("tx/dvbs2/fec", "none");
             break;
         }
-        m_CodeRate = atoi(svalue);
-        publish("tx/dvbs2/coderate", m_CodeRate);
+
+        if ((strcmp("1/2", svalue) == 0) || (strcmp("12", svalue) == 0))
+            m_CodeRate = C1_2;
+        if ((strcmp("2/3", svalue) == 0) || (strcmp("23", svalue) == 0))
+            m_CodeRate = C2_3;
+        if ((strcmp("3/4", svalue) == 0) || (strcmp("34", svalue) == 0))
+            m_CodeRate = C3_4;
+        if ((strcmp("5/6", svalue) == 0) || (strcmp("56", svalue) == 0))
+            m_CodeRate = C5_6;
+        // DVBS2 specific
+        if ((strcmp("1/4", svalue) == 0) || (strcmp("14", svalue) == 0))
+            m_CodeRate = C1_4;
+        if ((strcmp("1/3", svalue) == 0) || (strcmp("13", svalue) == 0))
+            m_CodeRate = C1_3;
+        if ((strcmp("2/5", svalue) == 0) || (strcmp("25", svalue) == 0))
+            m_CodeRate = C2_5;
+        if ((strcmp("3/5", svalue) == 0) || (strcmp("35", svalue) == 0))
+            m_CodeRate = C3_5;
+        if ((strcmp("4/5", svalue) == 0) || (strcmp("45", svalue) == 0))
+            m_CodeRate = C4_5;
+        if ((strcmp("8/9", svalue) == 0) || (strcmp("89", svalue) == 0))
+            m_CodeRate = C8_9;
+        if ((strcmp("9/10", svalue) == 0) || (strcmp("910", svalue) == 0))
+            m_CodeRate = C9_10;
+
+        publish("tx/dvbs2/fec", m_CodeRate);
         break;
     }
     case cmd_txdvbs2constellation:
@@ -1915,6 +1746,31 @@ bool HandleCommand(char *key, char *svalue)
 
         break;
     }
+    case cmd_txdvbs2pilots:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            switch (m_Pilots)
+            {
+            case 0:
+                publish("tx/dvbs2/pilots", "0");
+                break;
+            case 1:
+                publish("tx/dvbs2/pilots", "1");
+                break;
+            }
+            break;
+        }
+        if (strcmp(svalue, "1") == 0)
+            m_Pilots = 1;
+        if (strcmp(svalue, "0") == 0)
+             m_Pilots = 0;
+
+        publish("tx/dvbs2/pilots", svalue);
+
+        break;
+    }
     case cmd_txdvbs2sr:
     {
         if (strcmp(svalue, "?") == 0)
@@ -1924,8 +1780,8 @@ bool HandleCommand(char *key, char *svalue)
         }
         m_s2sr = atol(svalue);
 
-         publish("tx/sr",(float)4*m_s2sr,false);
-        
+        publish("tx/sr", (float)4 * m_s2sr, false);
+
         break;
     }
     case cmd_txdvbs2averagegain:
@@ -1936,38 +1792,36 @@ bool HandleCommand(char *key, char *svalue)
             break;
         }
         m_averagegain = atof(svalue);
-        fprintf(stderr,"Average gain %f\n",m_averagegain);
-         publish("tx/dvbs2/agcgain",m_averagegain);
-        
+        fprintf(stderr, "Average gain %f\n", m_averagegain);
+        publish("tx/dvbs2/agcgain", m_averagegain);
+
         break;
     }
     case cmd_txdvbs2fecmode:
     {
         if (strcmp(svalue, "?") == 0)
         {
-            if(m_Fecmode==fec_fix)
+            if (m_Fecmode == fec_fix)
                 publish("tx/dvbs2/fecmode", "fixed");
-            if(m_Fecmode==fec_variable)
-                publish("tx/dvbs2/fecmode", "variable");    
+            if (m_Fecmode == fec_variable)
+                publish("tx/dvbs2/fecmode", "variable");
             break;
         }
-        if(strcmp(svalue,"fixed")==0)
+        if (strcmp(svalue, "fixed") == 0)
         {
-           m_Fecmode=fec_fix;
-           publish("tx/dvbs2/fecmode",svalue);
+            m_Fecmode = fec_fix;
+            publish("tx/dvbs2/fecmode", svalue);
+        }
+        else if (strcmp(svalue, "variable") == 0)
+        {
+            m_Fecmode = fec_variable;
+            publish("tx/dvbs2/fecmode", svalue);
         }
         else
-        if(strcmp(svalue,"variable")==0)
-        {
-           m_Fecmode=fec_variable;
-           publish("tx/dvbs2/fecmode",svalue);
-        }
-        else           
-         publish("tx/dvbs2/fecmode","bad");
-        
+            publish("tx/dvbs2/fecmode", "bad");
+
         break;
     }
-    
     }
     return true;
 }
@@ -1981,15 +1835,19 @@ bool HandleStatus(char *key, char *svalue)
         {
             m_SR = atol(svalue);
             fprintf(stderr, "New sr %d\n", m_SR);
-
+            //update_web_param(,m_SR);
             if (RunRx)
             {
                 RunRx = false; // Dirty trick to let some time to get mutex
-                InitRxChannel(m_latency);
+                //InitRxChannel(m_latency);
+                InitRxChannel(fftsize*10,2);
                 RunRx = true;
             }
             else
-                InitRxChannel(m_latency);
+            {
+                //InitRxChannel(m_latency);
+                InitRxChannel(fftsize*10,2);
+            }    
         }
     }
     if (strcmp(key, "rx/format") == 0)
@@ -2010,7 +1868,7 @@ bool HandleStatus(char *key, char *svalue)
         {
             m_SRtx = atol(svalue);
             fprintf(stderr, "New sr %d\n", m_SRtx);
-            //SR Tx Change : Fixme
+            // SR Tx Change : Fixme
             /*
             if (RunTx)
             {
@@ -2020,7 +1878,7 @@ bool HandleStatus(char *key, char *svalue)
             }
             else
                 InitTxChannel(m_latencytx);
-            */    
+            */
         }
     }
     return true;
@@ -2046,8 +1904,10 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     InitRxChannel(20000);
     */
     // typeouput = output_stdout;
-    typeouput = output_udp;
+    typeouput = output_websocket;
+    //typeouput = output_udp;
     /*
+    
             if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
             {
                 fprintf(stderr, "Rx thread cannot be started\n");
@@ -2065,15 +1925,14 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     {
         fprintf(stderr, "Tx thread Started\n");
     }
-/*
-    if (pthread_create(&(m_tidtxfillbuff[0]), NULL, &tx_buffer_fill_thread, NULL) != 0)
-    {
-        fprintf(stderr, "Tx thread cannot be started\n");
-    }
-    else
-    {
-        fprintf(stderr, "Tx thread Started\n");
-    }
-*/
-    
+    /*
+        if (pthread_create(&(m_tidtxfillbuff[0]), NULL, &tx_buffer_fill_thread, NULL) != 0)
+        {
+            fprintf(stderr, "Tx thread cannot be started\n");
+        }
+        else
+        {
+            fprintf(stderr, "Tx thread Started\n");
+        }
+    */
 }
