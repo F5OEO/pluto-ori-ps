@@ -296,6 +296,14 @@ inline void udp_send(u_int16_t sock, char *ip, unsigned char *b, int len)
 
     int sent = sendto(sock, b, len, 0 /*MSG_ZEROCOPY*/, (struct sockaddr *)&m_client, sizeof(m_client));
 }
+enum
+{
+    tx_passtrough,
+    tx_iq,
+    tx_dvbs2_ts,
+    tx_dvbs2_gse
+
+};
 
 // Receive BBFrame from Longmynd and defrag to tun
 void *rx_bbframe_thread(void *arg)
@@ -320,6 +328,12 @@ void *rx_bbframe_thread(void *arg)
 
     while (true)
     {
+        if(m_txmode!=tx_dvbs2_gse)
+    {   
+         usleep(1000);   
+        continue;
+    }
+
         int length = 0;
         int index = 10;
         length = udp_receive(recv_bbframe_sock, BBframe, MAX_BBFRAME);
@@ -419,15 +433,8 @@ struct bbheader
 };
 
 
-#define MAX_QUEUE_ITEM 50
-enum
-{
-    tx_passtrough,
-    tx_iq,
-    tx_dvbs2_ts,
-    tx_dvbs2_gse
+#define MAX_QUEUE_ITEM 200
 
-};
 
 bool addgsebbframe(uint8_t *bbframe, size_t len,size_t modcod)
 {
@@ -479,6 +486,11 @@ void *rx_tun_thread(void *arg)
     while (true)
     {
         // int len = read_from_tun(tun, ippacket);
+        if(m_txmode!=tx_dvbs2_gse)
+    {   
+         usleep(1000);   
+        continue;
+    }
         gse_vfrag_t *vfrag_pdu = NULL;
 
         uint16_t framebytes = BBFrameLenLut[((m_gseframetype == 0 ? 11 : 0) + m_gsecoderate+tempcoderate)%22]/8;
@@ -636,10 +648,17 @@ void *rx_tun_thread(void *arg)
             if(m_Fecmode==fec_variable)
             {
             
-            tempcoderate=(m_bbframe_queue.size()-1)/2;
-            if(tempcoderate<0) tempcoderate=0;
-            if(tempcoderate>10) tempcoderate=10;
-            
+            tempcoderate=(m_bbframe_queue.size());
+            if(tempcoderate<0) 
+                tempcoderate=0;
+            if(m_gsecoderate+tempcoderate>9)
+            {
+                
+                tempcoderate=9-m_gsecoderate;
+                
+
+            }     
+            fprintf(stderr,"gse variable : tempcoderate %d coderate = %d\n",tempcoderate,m_gsecoderate+tempcoderate);
             }
             //udp_send(send_bbframe_sock, send_bbframe_ip, bbframe, framebytes - avail);
         }

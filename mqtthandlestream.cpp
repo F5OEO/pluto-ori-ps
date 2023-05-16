@@ -1236,7 +1236,8 @@ void *tx_buffer_thread(void *arg)
     GetInterfaceip("eth0", ip);
     //init_tsmux("230.10.0.1:1234", ip);
     init_tsmux("230.10.0.1:1234", ip);
-    init_gsemux("230.0.0.2:1234", ip, "44.0.0.2", 20000);
+    //init_gsemux("230.0.0.2:1234", ip, "44.0.0.2", 20000);
+    init_gsemux("230.0.0.3:1234", ip, "44.0.0.2", 20000); // Yves
     while (true)
     {
 
