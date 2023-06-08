@@ -644,8 +644,10 @@ void *rx_tun_thread(void *arg)
         //fprintf(stderr, "dfl %d \n",(framebytes - 10 - avail) );    
 
         if (data != end)
+        {
             fprintf(stderr, "GSE: BBFRAME END ISSUE\n");
-
+            break;
+        }
         if (framebytes - avail > 10)
         {
             // fprintf(stderr, "send udp %d \n",framebytes-avail);
@@ -662,8 +664,8 @@ void *rx_tun_thread(void *arg)
             {
 
                 tempcoderate = (m_bbframe_queue.size()/2);
-                if (m_gsecoderate + tempcoderate > 10)
-                    tempcoderate = 10;
+                if (m_gsecoderate + tempcoderate > 9)
+                    tempcoderate = 9 - m_gsecoderate ;
                 
                 //fprintf(stderr, "gse variable : tempcoderate %d coderate = %d\n", tempcoderate, m_gsecoderate + tempcoderate);
             }
