@@ -661,14 +661,10 @@ void *rx_tun_thread(void *arg)
             if (m_Fecmode == fec_variable)
             {
 
-                tempcoderate = (m_bbframe_queue.size());
-                if (tempcoderate < 0)
-                    tempcoderate = 0;
-                if (m_gsecoderate + tempcoderate > 9)
-                {
-
-                    tempcoderate = 9 - m_gsecoderate;
-                }
+                tempcoderate = (m_bbframe_queue.size()/2);
+                if (m_gsecoderate + tempcoderate > 10)
+                    tempcoderate = 10;
+                
                 //fprintf(stderr, "gse variable : tempcoderate %d coderate = %d\n", tempcoderate, m_gsecoderate + tempcoderate);
             }
             else
