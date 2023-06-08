@@ -555,6 +555,7 @@ void setpaddingts()
     pthread_mutex_unlock(&buffer_mutexts);
 }
 
+//#define COMIT_FW 12345
 static pthread_t p_rxts;
 void init_tsmux(char *mcast_ts, char *mcast_iface)
 {
@@ -565,8 +566,11 @@ void init_tsmux(char *mcast_ts, char *mcast_iface)
     fscanf(cmd,"%s",result); 
     if(strcmp(result,"")==0) strcpy(result,"nocall");
     pclose(cmd);
-
-     customsdt=sdt_fmt(1,1,1,"PlutoFPGA",result);
+    
+    char provider[255]={0x0};
+    sprintf(provider,"F5OEO-PlutoFPGA-%s",COMIT_FW);
+    //fprintf(stderr,provider);
+     customsdt=sdt_fmt(1,1,1,provider,result);
     int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
     int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, DATAMODE_TS);
     fmt.fec = 0;
