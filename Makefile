@@ -10,10 +10,8 @@ INC=-I/usr/local/include/gse
 all: pluto_mqtt_ctrl pluto_stream 
 pluto_mqtt_ctrl: pluto_mqtt_ctrl.cpp mymqtt.h mqtthandlecommand.h mqtthandlecommand.cpp iiofshelper.cpp iiofshelper.h
 	$(CXX) $(FLAGS) -o pluto_mqtt_ctrl pluto_mqtt_ctrl.cpp mqtthandlecommand.cpp iiofshelper.cpp liboscimp_fpga_static.a -lm -lrt -lpthread -lmosquitto -ljansson
-pluto_stream: pluto_stream.cpp mymqtt.h mqtthandlestream.h mqtthandlestream.cpp iiofshelper.cpp dvbs2neon/dvbs2neon0v43.S tsinputmux.cpp tsinputmux.h gsemux.cpp gsemux.h iqtofft.h iqtofft.cpp
-	$(CXX) $(INC) $(FLAGS) -o pluto_stream gsemux.cpp dvbs2neon/dvbs2neon0v43.S pluto_stream.cpp mqtthandlestream.cpp iiofshelper.cpp tsinputmux.cpp iqtofft.cpp -lm -lrt -lpthread -lmosquitto -ljansson -lgse	-lNE10 -lcivetweb
-bbgse: mygse/bbgse.c 
-	$(CC) $(FLAGS) $(INC) -DPLUTO -o bbgse mygse/bbgse.c -lm -lrt -lpthread -lmosquitto -ljansson -liio -lgse
+pluto_stream: pluto_stream.cpp mymqtt.h mqtthandlestream.h mqtthandlestream.cpp iiofshelper.cpp dvbs2neon/dvbs2neon0v43.S tsinputmux.cpp tsinputmux.h gsemux.cpp gsemux.h iqtofft.h iqtofft.cpp ts_util/sdt.cpp
+	$(CXX) $(INC) $(FLAGS) -o pluto_stream gsemux.cpp dvbs2neon/dvbs2neon0v43.S ts_util/sdt.cpp pluto_stream.cpp mqtthandlestream.cpp iiofshelper.cpp tsinputmux.cpp iqtofft.cpp -lm -lrt -lpthread -lmosquitto -ljansson -lgse	-lNE10 -lcivetweb
 install: 
 	
 	cp pluto_stream $(PAPR_ORI)
@@ -24,6 +22,8 @@ install:
 	cp unmute.sh $(PAPR_ORI)
 	cp settxmode.sh $(PAPR_ORI)
 	cp initdvb.sh $(PAPR_ORI)
-
+	cp mqtt_ifconfig.sh $(PAPR_ORI)
+	cp mqtt_iptable.sh $(PAPR_ORI)
+	cp passthrough.sh $(PAPR_ORI)
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse

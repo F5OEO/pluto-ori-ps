@@ -67,6 +67,8 @@ Usage:\npluto_mqtt_ctrl \n\
 
 } /* end function print_usage */
 
+char sSerial[255];
+
 /* Callback called when the client receives a message. */
 void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_message *msg)
 {
@@ -75,12 +77,7 @@ void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_messag
     char *key = msg->topic;
 	char *svalue = (char *)msg->payload;
 
-    FILE *fdserial=NULL;
-    char sSerial[255];
-    fdserial=fopen("/sys/kernel/config/usb_gadget/composite_gadget/strings/0x409/serialnumber","r");
-    fscanf(fdserial,"%s",sSerial);
-    fclose(fdserial);
-
+    
     //fprintf(stderr,"%x %s %s\n",mosq,key,svalue);
 
     char ValidCommand[512];
@@ -126,13 +123,24 @@ int main(int argc, char **argv)
 
     mqttinit();
     size_t count=0;
-     FILE *fdserial=NULL;
-    char sSerial[255];
-    fdserial=fopen("/sys/kernel/config/usb_gadget/composite_gadget/strings/0x409/serialnumber","r");
     
+    
+/*
+    FILE *fdserial=NULL;
+    fdserial=fopen("/sys/kernel/config/usb_gadget/composite_gadget/strings/0x409/serialnumber","r");
     fscanf(fdserial,"%s",sSerial);
     fclose(fdserial);
-    //fprintf(stderr,"line1:%sline2%s\n",sSerial,sSerial);
+*/
+    FILE *cmd=popen("fw_printenv -n call", "r");
+    char result[255]={0x0};
+    //fgets(result, sizeof(result), cmd); 
+    fscanf(cmd,"%s",result); 
+    if(strcmp(result,"")==0) strcpy(result,"nocall");
+    pclose(cmd);
+
+    strcpy(sSerial,result);
+
+    fprintf(stderr,"KeyRoot %s\n",sSerial);
     
     HandleCommandInit(mosq,sSerial);
    

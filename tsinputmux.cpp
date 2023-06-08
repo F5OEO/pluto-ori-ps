@@ -89,7 +89,7 @@ enum
 };
 int m_ModeCod = C2_3 + longframe;
 
-#define MAX_QUEUE_ITEM 40
+#define MAX_QUEUE_ITEM 100
 #define MAX_QUEUE_CHANGEMODCOD 2
 
 enum
@@ -166,6 +166,11 @@ u_int16_t udp_init(char *ip, const char *iface, int rx) // interface to multicas
     /* try to reuse the socket */
     int len = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &len, sizeof(len));
+
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
     char text[40];
     char *add[2];
@@ -253,16 +258,34 @@ u_int16_t recv_ts_sock;
 
 pthread_mutex_t buffer_mutexts;
 DVB2FrameFormat tempmodecode;
-
+uint8_t *customsdt;
+uint8_t* sdt_fmt( int stream_id, int network_id, int service_id, char *service_provider_name, char *service_name );
+void update_cont_counter( uint8_t *b );
 void addneonts(uint8_t *tspacket, size_t length)
 {
-    unsigned char *bbframeptr = NULL;
+    unsigned short *bbframeptr = NULL;
     uint8_t *cur_packet = tspacket;
 
+    if(length%188!=0) 
+    {
+        fprintf(stderr,"Ts input error len %d\n",length);
+        return;
+    }
     for (int i = 0; i < length / 188; i++)
     {
         // pthread_mutex_lock(&buffer_mutexts);
-        bbframeptr = (unsigned char *)dvbs2neon_packet(0, (uint32)(cur_packet), 0);
+        if(cur_packet[0]!=0x47)
+        {
+            fprintf(stderr,"Ts input error aligned %x\n",cur_packet[0]);
+            return;
+        }
+        if(cur_packet[2]==0x11) //replace sdt
+        {
+                bbframeptr = /*(unsigned char *)*/dvbs2neon_packet(0, (uint32)(customsdt), 0);
+                update_cont_counter(customsdt);
+        }
+        else
+                 bbframeptr = /*(unsigned char *)*/dvbs2neon_packet(0, (uint32)(cur_packet), 0);
         cur_packet += 188;
         if (bbframeptr != NULL)
         {
@@ -292,18 +315,25 @@ void addneonts(uint8_t *tspacket, size_t length)
             else
                 coderate = i;
             extern unsigned char  getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate,uint Pilots);
-            unsigned char curmodcod = getdvbs2modcod(fmt.frame_type==0?0:1,fmt.constellation,coderate,fmt.pilots);                       
+            unsigned char curmodcod = getdvbs2modcod(fmt.frame_type==0?0:1,fmt.constellation,coderate,fmt.pilots);  
+
             addbbframe((uint8_t *)bbframeptr, ByteCount, curmodcod);
 
-            if ((m_Fecmode == fec_variable) && (m_bbframe_queue.size() >= 2))
+            if ((m_Fecmode == fec_variable) /*&& (m_bbframe_queue.size() >= 2)*/)
             {
                 tempmodecode = fmt;
-                tempmodecode.fec += (m_bbframe_queue.size() / 2 - 1);
-                if (tempmodecode.fec < 0)
-                    tempmodecode.fec = 0;
-                if (tempmodecode.fec > 10)
+                int fecoffset = (m_bbframe_queue.size() /2);
+                
+                if (fecoffset+tempmodecode.fec > 10)
                     tempmodecode.fec = 10;
+                else
+                       tempmodecode.fec+= fecoffset;
+                //fprintf(stderr,"Variable queu %d fec %d\n",m_bbframe_queue.size(),tempmodecode.fec);    
                 int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&tempmodecode, 0);
+            }
+            else
+            {
+                int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
             }
             /*
               addbbframe((uint8_t *)bbframeptr, ByteCount,m_ModeCod+(count+1)%2);
@@ -430,12 +460,27 @@ void addts(uint8_t *tspacket, size_t length)
 
 void *rx_ts_thread(void *arg)
 {
-    unsigned char tspacket[7 * 188];
+    unsigned char tspacket[7 * 188*10];
 
     int length = 0;
+   
     while (true)
     {
         length = udp_receive(recv_ts_sock, tspacket, 7 * 188);
+        
+        /*
+        int udpsize=0;
+        ioctl(recv_ts_sock, FIONREAD, &udpsize);
+        while(udpsize>0)
+        {
+            length += udp_receive(recv_ts_sock, tspacket+length, 7*188);
+            ioctl(recv_ts_sock, FIONREAD, &udpsize);
+        }
+        */
+
+        //fprintf(stderr,"Udp %d / %d\n",length,udpsize);
+        if(length>0)
+        { 
         pthread_mutex_lock(&buffer_mutexts);
 #ifdef WITH_NEON
         addneonts(tspacket, length);
@@ -444,6 +489,7 @@ void *rx_ts_thread(void *arg)
 #endif
 
         pthread_mutex_unlock(&buffer_mutexts);
+        }
     }
 }
 
@@ -491,7 +537,7 @@ void setpaddingts()
 {
     static unsigned char NullPacket[7 * 188] = {0x47, 0x1F, 0xFE, 0x10, 'F', '5', 'O', 'E', 'O'};
     static unsigned char cc = 0;
-    for (int k = 0; k < 7; k++)
+    for (int k = 0; k < 1; k++)
     {
         memcpy(NullPacket + k * 188, NullPacket, 9);
         NullPacket[3 + k * 188] = 0x10 + cc;
@@ -502,7 +548,7 @@ void setpaddingts()
     pthread_mutex_lock(&buffer_mutexts);
 
 #ifdef WITH_NEON
-    addneonts(NullPacket, 7 * 188);
+    addneonts(NullPacket, /*7 **/ 188);
 #else
     addts(NullPacket, 7 * 188);
 #endif
@@ -512,6 +558,15 @@ void setpaddingts()
 static pthread_t p_rxts;
 void init_tsmux(char *mcast_ts, char *mcast_iface)
 {
+
+    FILE *cmd=popen("fw_printenv -n call", "r");
+    char result[255]={0x0};
+    //fgets(result, sizeof(result), cmd); 
+    fscanf(cmd,"%s",result); 
+    if(strcmp(result,"")==0) strcpy(result,"nocall");
+    pclose(cmd);
+
+     customsdt=sdt_fmt(1,1,1,"PlutoFPGA",result);
     int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
     int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, DATAMODE_TS);
     fmt.fec = 0;

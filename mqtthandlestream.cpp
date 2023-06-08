@@ -144,6 +144,8 @@ size_t m_SRtx = 3000000;
 
 size_t m_s2sr = 1000000;
 
+char mcast_rxiface[255]; // mcast ip to receive bbrame from longmynd
+
 enum
 {
     output_stdout,
@@ -169,13 +171,13 @@ enum
 };
 char s_txmode[255] = "pass";
 int m_txmode = tx_passtrough;
-
+//int m_txmode = tx_dvbs2_ts;
 // https://github.com/phase4ground/dvb_fpga/blob/master/rtl/inline_config_adapter.vhd
 enum
 {
-    longframe ,
+    longframe,
     shortframe
-    
+
 };
 enum
 {
@@ -257,7 +259,15 @@ void SetFPGAMode(bool dvbs2)
         WriteRegister(switchdest + 0x40, 0x01); // SI1->MI0
         WriteRegister(switchdest + 0x00, 0x02);
     }
-    
+
+/*
+    fprintf(stderr,"%x %x\n",switchsrc + 0x40,ReadRegister(switchsrc + 0x40));
+    fprintf(stderr,"%x %x\n",switchsrc + 0x44,ReadRegister(switchsrc + 0x44));
+    fprintf(stderr,"%x %x\n",switchsrc + 0x0,ReadRegister(switchsrc + 0x0));
+
+    fprintf(stderr,"%x %x\n",switchdest + 0x40,ReadRegister(switchdest + 0x40));
+    fprintf(stderr,"%x %x\n",switchdest + 0x0,ReadRegister(switchdest + 0x0));
+*/    
 }
 
 // https://github.com/phase4ground/dvb_fpga/blob/master/third_party/airhdl/dvbs2_encoder_regs.md
@@ -267,17 +277,21 @@ void SetDVBS2Constellation()
     int16_t imap;
     int16_t qmap;
     size_t Reg;
-    //int16_t magqspk=23170;
-    //int16_t magqspk=32000;
-    int16_t magqspk=23170;
-    imap=magqspk;qmap=magqspk;
-    WriteRegister(DVBS2Register + 0x110 + 0, (imap<<16)|qmap&0xFFFF);
-     imap=magqspk;qmap=-magqspk;
-    WriteRegister(DVBS2Register + 0x110 + 4, (imap<<16)|qmap&0xFFFF);
- imap=-magqspk;qmap=magqspk;
-    WriteRegister(DVBS2Register + 0x110 + 8, (imap<<16)|qmap&0xFFFF);
- imap=-magqspk;qmap=-magqspk;
-    WriteRegister(DVBS2Register + 0x110 + 12, (imap<<16)|qmap&0xFFFF);
+    // int16_t magqspk=23170;
+    // int16_t magqspk=32000;
+    int16_t magqspk = 23170;
+    imap = magqspk;
+    qmap = magqspk;
+    WriteRegister(DVBS2Register + 0x110 + 0, (imap << 16) | qmap & 0xFFFF);
+    imap = magqspk;
+    qmap = -magqspk;
+    WriteRegister(DVBS2Register + 0x110 + 4, (imap << 16) | qmap & 0xFFFF);
+    imap = -magqspk;
+    qmap = magqspk;
+    WriteRegister(DVBS2Register + 0x110 + 8, (imap << 16) | qmap & 0xFFFF);
+    imap = -magqspk;
+    qmap = -magqspk;
+    WriteRegister(DVBS2Register + 0x110 + 12, (imap << 16) | qmap & 0xFFFF);
 
     for (size_t i = 0; i < 12; i++)
     {
@@ -396,12 +410,13 @@ void udp_init(void)
         return;
     }
     int one;
-    //#define SO_ZEROCOPY 60
+    // #define SO_ZEROCOPY 60
 
-    if (setsockopt(m_sock, SOL_SOCKET, SO_ZEROCOPY, &one, sizeof(one)))
+    /*if (setsockopt(m_sock, SOL_SOCKET, SO_ZEROCOPY, &one, sizeof(one)))
     {
         fprintf(stderr, "UDP zerocopy mode failed\n");
     }
+    */
 
     // SO_ZEROCOPY
     // udp_set_ip("192.168.1.39:10000");
@@ -471,7 +486,7 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
                 strerror(-ret));
     }
 }
-
+extern bool SendCommand(char *skey, char *svalue);
 void InitTxChannel(size_t len, unsigned int nbBuffer)
 {
     if (m_ctx == NULL)
@@ -485,15 +500,18 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     get_ad9361_stream_ch(TX, m_tx, 0, &m_tx0_i);
     get_ad9361_stream_ch(TX, m_tx, 1, &m_tx0_q);
 
-    fprintf(stderr, "Tx Stream with %u buffers of %d samples\n", nbBuffer, len);
+    
+
+
     // Change the size of the buffer
     // m_max_len = len;
     char msgerror[255];
-    //pthread_mutex_lock(&bufpluto_mutextx);
-    if (m_txbuf)
+    // pthread_mutex_lock(&bufpluto_mutextx);
+    if (m_txbuf!=NULL)
     {
         iio_buffer_cancel(m_txbuf);
-
+        iio_strerror(errno, msgerror, sizeof(msgerror));
+        fprintf(stderr, "Cancel buffer %s\n", msgerror);
         iio_buffer_destroy(m_txbuf);
         iio_strerror(errno, msgerror, sizeof(msgerror));
         fprintf(stderr, "Destroy buffer %s\n", msgerror);
@@ -502,20 +520,28 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
         iio_strerror(errno, msgerror, sizeof(msgerror));
         fprintf(stderr, "channel disable tx %s\n", msgerror);
         m_txbuf = NULL;
+        //SendCommand("/sys/bus/iio/devices/iio:device2/buffer/enable", "0");
+        
     }
     if (len == 0) // We are in passthrough, don't get the stream because it is used externally
     {
         return;
     }
+
+
+    len=((len/8)+1)*8;
     int ret = iio_device_set_kernel_buffers_count(m_tx, nbBuffer); // SHould be called BEFORE create_buffer (else not setting)
+    iio_strerror(errno, msgerror, sizeof(msgerror));
+        fprintf(stderr, "Kernel count %s\n", msgerror);
     if (ret != 0)
         fprintf(stderr, "set_kernel_buffers_count issue\n");
     //	printf("* Enabling IIO streaming channels\n");
     iio_channel_enable(m_tx0_i);
     iio_channel_enable(m_tx0_q);
-
+    iio_strerror(errno, msgerror, sizeof(msgerror));
+        fprintf(stderr, "enable buffer %s\n", msgerror);
     m_txbuf = iio_device_create_buffer(m_tx, len, false);
-
+    
     if (m_txbuf == NULL)
     {
         iio_strerror(errno, msgerror, sizeof(msgerror));
@@ -525,7 +551,8 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     }
 
     iio_buffer_set_blocking_mode(m_txbuf, true);
-    //pthread_mutex_unlock(&bufpluto_mutextx);
+    fprintf(stderr, "Tx Stream with %u buffers of %d samples\n", nbBuffer, len);
+    // pthread_mutex_unlock(&bufpluto_mutextx);
     /*
     int ret = iio_device_reg_write(m_tx, 0x80000088, 0x4);
     if (ret)
@@ -603,7 +630,7 @@ void InitTxChannel(size_t LatencyMicro)
         BufferLentx = LatencyMicro * (m_SRtx / 1e6); // 12 because FFT transform
 
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        // BufferLentx = ((5380/4 + 1) ) ; // MAX BBFRAME LENGTH aligned 8
+        
         InitTxChannel(BufferLentx, 2);
 
         fprintf(stderr, "ENd init\n");
@@ -663,7 +690,7 @@ ssize_t direct_rx_samples(short **RxBuffer)
         int ret = iio_device_reg_read(m_rx, 0x80000088, &val);
         if (val & 4)
         {
-            fprintf(stderr, "!");
+            //fprintf(stderr, "!");
             fflush(stderr);
             Underflow++;
             iio_device_reg_write(m_rx, 0x80000088, val); // Clear bits
@@ -710,9 +737,9 @@ void *rx_buffer_thread(void *arg)
     udp_set_ip("230.0.0.1:10000", m_iface);
     remove("/dev/rx1");
     mkfifo("/dev/rx1", 0666);
-    //fdout = fopen("/dev/rx1", "wb");
-    InitRxChannel(fftsize*10,2);
-    init_fft(fftsize,30);
+    // fdout = fopen("/dev/rx1", "wb");
+    InitRxChannel(fftsize * 10, 2);
+    init_fft(fftsize, 30);
     while (true)
     {
 
@@ -773,15 +800,14 @@ void *rx_buffer_thread(void *arg)
             {
                 RxSize = direct_rx_samples(&RxBuffer);
                 udp_send((char *)RxBuffer, RxSize * 2 * sizeof(short));
-                
             }
             break;
 
             case output_websocket:
             {
                 RxSize = direct_rx_samples(&RxBuffer);
-                
-                iqtofft(RxBuffer,RxSize);
+
+                iqtofft(RxBuffer, RxSize);
             }
             break;
             }
@@ -805,25 +831,25 @@ ssize_t write_from_file(FILE *fd, int len)
 {
 
     pthread_mutex_lock(&bufpluto_mutextx);
-    
+
     short *buffpluto = (short *)iio_buffer_start(m_txbuf);
-    
+
     int Read = fread(buffpluto, 2 * sizeof(short), len, fd);
     // Fixme : Could have some deadlock here
-     if(m_txmode!=tx_iq) 
+    if (m_txmode != tx_iq)
     {
-        fprintf(stderr,"mode has changed \n");
+        fprintf(stderr, "mode has changed \n");
         pthread_mutex_unlock(&bufpluto_mutextx);
         return 0;
     }
-    if (Read != len )
+    if (Read != len)
     {
         fprintf(stderr, "Only read %d / %d\n", Read, len);
         return Read;
     }
 
-    int sent=iio_buffer_push_partial(m_txbuf,Read);
-    
+    int sent = iio_buffer_push_partial(m_txbuf, Read);
+
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
     if (val & 1)
@@ -839,19 +865,19 @@ ssize_t write_from_file(FILE *fd, int len)
 ssize_t write_from_buffer(short *Buffer, int len)
 {
     pthread_mutex_lock(&bufpluto_mutextx);
-     if(m_txmode!=tx_test) 
+    if (m_txmode != tx_test)
     {
-        fprintf(stderr,"mode has changed \n");
+        fprintf(stderr, "mode has changed \n");
         pthread_mutex_unlock(&bufpluto_mutextx);
         return 0;
     }
     short *buffpluto = (short *)iio_buffer_start(m_txbuf);
-    //fprintf(stderr, "buffpluto %x Buffer %x\n",buffpluto,Buffer);
+    // fprintf(stderr, "buffpluto %x Buffer %x\n",buffpluto,Buffer);
     memcpy(buffpluto, Buffer, 2 * sizeof(short) * len);
-    //fprintf(stderr, "*\n");
-   
+    // fprintf(stderr, "*\n");
+
     size_t sent = iio_buffer_push_partial(m_txbuf, len);
-    //fprintf(stderr, "!\n");
+    // fprintf(stderr, "!\n");
     pthread_mutex_unlock(&bufpluto_mutextx);
     // size_t sent = iio_buffer_push(m_txbuf);
     // fprintf(stderr, "*");
@@ -920,53 +946,54 @@ typedef struct
     uint32_t output_format; // dummy_frame in DATV-Express
 } DVB2FrameFormat;
 
-unsigned char  getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate,uint Pilots)
+unsigned char getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate, uint Pilots)
 {
     unsigned char NewModCode;
-    
-    if(CodeRate >10 ) CodeRate=10;
-    if(Constellation==mod_qpsk)
+
+    if (CodeRate > 10)
+        CodeRate = 10;
+    if (Constellation == mod_qpsk)
     {
-         NewModCode = CodeRate+1;
+        NewModCode = CodeRate + 1;
     }
-    if(Constellation==mod_8psk)
+    if (Constellation == mod_8psk)
     {
-        unsigned char Tab8PSK[]={12,12,12,12,12,13,14,15,15,16,17};
-         NewModCode = Tab8PSK[CodeRate];
+        unsigned char Tab8PSK[] = {12, 12, 12, 12, 12, 13, 14, 15, 15, 16, 17};
+        NewModCode = Tab8PSK[CodeRate];
     }
-    if(Constellation==mod_16apsk)
+    if (Constellation == mod_16apsk)
     {
-        unsigned char Tab16APSK[]={18,18,18,18,18,18,19,20,21,22,23};
-         NewModCode = Tab16APSK[CodeRate];
+        unsigned char Tab16APSK[] = {18, 18, 18, 18, 18, 18, 19, 20, 21, 22, 23};
+        NewModCode = Tab16APSK[CodeRate];
     }
-    if(Constellation==mod_32apsk)
+    if (Constellation == mod_32apsk)
     {
-        unsigned char Tab32APSK[]={24,24,24,24,24,24,24,25,26,27,28};
+        unsigned char Tab32APSK[] = {24, 24, 24, 24, 24, 24, 24, 25, 26, 27, 28};
         NewModCode = Tab32APSK[CodeRate];
     }
-    NewModCode|=(Pilots&1)<<5; // No pilots
-    if(FrameType==longframe)
-         NewModCode|=0<<6; // Longframe 
+    NewModCode |= (Pilots & 1) << 5; // No pilots
+    if (FrameType == longframe)
+        NewModCode |= 0 << 6; // Longframe
     else
-        NewModCode|=1<<6; // Longframe 
+        NewModCode |= 1 << 6; // Longframe
 
-    return  NewModCode;   
+    return NewModCode;
 }
 
-void SetModCode(uint FrameType, uint Constellation, uint CodeRate,uint Pilots)
+void SetModCode(uint FrameType, uint Constellation, uint CodeRate, uint Pilots)
 {
     static char OldModCode = 0xFF;
     if (CodeRate == 0xFF)
         return;
-   
-    unsigned char NewModCode = getdvbs2modcod(FrameType,Constellation,CodeRate,Pilots);
+
+    unsigned char NewModCode = getdvbs2modcod(FrameType, Constellation, CodeRate, Pilots);
 
     if (NewModCode != OldModCode)
     {
-        fprintf(stderr, "Frame %d Constellation %d CodeRate %d Pilots %d\n", FrameType, Constellation, CodeRate,Pilots);
+        fprintf(stderr, "Frame %d Constellation %d CodeRate %d Pilots %d\n", FrameType, Constellation, CodeRate, Pilots);
         // write_byte_from_buffer_burst(NULL, 0, true);
         //  write_byte_from_buffer_split(NULL, 0, true); // Done prior because m_code is still used
-       
+
         m_BBFrameLenBit = BBFrameLenLut[(FrameType == shortframe ? 0 : 11) + CodeRate];
 
         // m_ModCode = NewModCode;
@@ -978,9 +1005,9 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate,uint Pilots)
             // int status = dvbs2neon_control(STREAM0, CONTROL_SET_OUTPUT_BUFFER, (uint32)BBFrameNeonBuff, 0); // CONTROL_SET_OUTPUT_BUFFER
             //  fprintf(stderr, "Status %d \n", status);
         }
-        setneonmodcod(Constellation, CodeRate, FrameType,Pilots);
+        setneonmodcod(Constellation, CodeRate, FrameType, Pilots);
         // fprintf(stderr, "modocodgse  %d \n", (FrameType == 0 ? 0 : 11) + CodeRate);
-        setgsemodcod(Constellation, CodeRate, FrameType,Pilots);
+        setgsemodcod(Constellation, CodeRate, FrameType, Pilots);
         // fprintf(stderr, "Status dvbs2neon_control %d \n", status);
     }
 }
@@ -1004,30 +1031,30 @@ ssize_t write_bbframe()
     unsigned int IdxStart = LazyLut[(len + 2) % 8];
 
     memset(buffpluto, 0, 2); // Idx = len -1
-   
-    //buffpluto[0] = newbuf->modecod;
-     buffpluto[0]=0xB8;
-     buffpluto[1]=newbuf->modecod;
-     /*
-    if(newbuf->modecod>=longframe)
-    {
-        buffpluto[1]=(newbuf->modecod-longframe+1);
-        buffpluto[1]|=0<<5; // No pilots
-        buffpluto[1]|=0<<6; // Longframe   
-    }
-    else
-    {
-        buffpluto[1]=(newbuf->modecod+1);
-        buffpluto[1]|=1<<5; // No pilots
-        buffpluto[1]|=1<<6; // SHortframe   
-    }*/
 
-    //fprintf(stderr,"Warning : fec %d short = %d\n",buffpluto[1]&0x1F,buffpluto[1]>>5);
+    // buffpluto[0] = newbuf->modecod;
+    buffpluto[0] = 0xB8;
+    buffpluto[1] = newbuf->modecod;
+    /*
+   if(newbuf->modecod>=longframe)
+   {
+       buffpluto[1]=(newbuf->modecod-longframe+1);
+       buffpluto[1]|=0<<5; // No pilots
+       buffpluto[1]|=0<<6; // Longframe
+   }
+   else
+   {
+       buffpluto[1]=(newbuf->modecod+1);
+       buffpluto[1]|=1<<5; // No pilots
+       buffpluto[1]|=1<<6; // SHortframe
+   }*/
+
+    // fprintf(stderr,"Warning : fec %d short = %d\n",buffpluto[1]&0x1F,buffpluto[1]>>5);
     memcpy(buffpluto + 2, newbuf->bbframe, newbuf->size);
     free(newbuf);
     m_bbframe_queue.pop();
     pthread_mutex_unlock(&buffer_mutextx);
-    if (BBFrameLenLut[buffpluto[1] ] / 8 != len)
+    if (BBFrameLenLut[buffpluto[1]] / 8 != len)
     {
         // fprintf(stderr,"Warning : modcod %x bbfram len %d len %d\n",buffpluto[0],BBFrameLenLut[buffpluto[0]-0x2c+11]/8,len);
         // return 0;
@@ -1073,8 +1100,6 @@ ssize_t write_bbframe()
 
     return sent;
 }
-
-
 
 void *tx_buffer_fill_thread(void *arg)
 {
@@ -1149,7 +1174,7 @@ void GetInterfaceip(char *if_name, char *ip)
 void SetTxMode(int Mode)
 {
     pthread_mutex_lock(&bufpluto_mutextx);
-    
+
     switch (Mode)
     {
     case tx_passtrough:
@@ -1169,8 +1194,15 @@ void SetTxMode(int Mode)
     break;
     case tx_dvbs2_ts:
     {
+        static int debugbuffer=2;
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        InitTxChannel(BufferLentx, 2);
+        //Should be calculated from mm_srtx
+        int nbBuffer=((m_SRtx/2000000)/2)*8;
+        
+        InitTxChannel(BufferLentx,nbBuffer>=2?nbBuffer:2);
+        //InitTxChannel(BufferLentx,debugbuffer);
+        debugbuffer*=2;
+        
         SetFPGAMode(true);
         ResetDVBS2();
         SetDVBS2Constellation();
@@ -1188,17 +1220,17 @@ void SetTxMode(int Mode)
     break;
     }
     m_txmode = Mode;
-    fprintf(stderr,"Change mode %d\n",m_txmode);
-   
+    fprintf(stderr, "Change mode %d\n", m_txmode);
+
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
-    while((val & 1) ==0)
+    while ((val & 1) == 0)
     {
-        fprintf(stderr,"Wait for purging\n");
+        fprintf(stderr, "Wait for purging\n");
         usleep(1000);
-         iio_device_reg_read(m_tx, 0x80000088, &val);
+        iio_device_reg_read(m_tx, 0x80000088, &val);
     }
-   iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits 
+    iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
     pthread_mutex_unlock(&bufpluto_mutextx);
 }
 
@@ -1231,19 +1263,19 @@ void *tx_buffer_thread(void *arg)
     }
 
     int testcoderate = 0;
-
+    SetTxMode(tx_passtrough);
     char ip[255];
     GetInterfaceip("eth0", ip);
-    //init_tsmux("230.10.0.1:1234", ip);
+    // init_tsmux("230.10.0.1:1234", ip);
     init_tsmux("230.10.0.1:1234", ip);
-    //init_gsemux("230.0.0.2:1234", ip, "44.0.0.2", 20000);
-    init_gsemux("230.0.0.3:1234", ip, "44.0.0.2", 20000); // Yves
+    init_gsemux("230.0.0.2:1234", ip, "44.0.0.2", 200000);
+    // init_gsemux("230.0.0.3:1234", ip, "44.0.0.2", 20000); // Yves
     while (true)
     {
 
         if (RunTx)
         {
-            
+
             switch (m_txmode)
             {
 
@@ -1253,13 +1285,15 @@ void *tx_buffer_thread(void *arg)
                 if (m_CodeRate == 0xFF)
                     break;
                 /*
-                    if(m_bbframe_queue.size()>2)
-                    {
-                        SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate+m_bbframe_queue.size()/4);
-                    }
-                    else
-                    */
-                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate,m_Pilots);
+                    pthread_mutex_lock(&bufpluto_mutextx);
+                   InitTxChannel(BufferLentx,2);
+                    pthread_mutex_unlock(&bufpluto_mutextx);
+                 
+                    usleep(500000);
+                    continue;
+                     */
+                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate, m_Pilots);
+                //fprintf(stderr,"Queue %d\n",m_bbframe_queue.size());    
                 if (!m_bbframe_queue.empty())
                 {
 
@@ -1267,7 +1301,7 @@ void *tx_buffer_thread(void *arg)
                 }
                 else // No more data : need padding
                 {
-
+                    
                     if (m_txmode == tx_dvbs2_ts)
                         setpaddingts();
                     else
@@ -1283,7 +1317,7 @@ void *tx_buffer_thread(void *arg)
             break;
             case tx_iq:
             {
-                write_from_file(fdin,BufferLentx);
+                write_from_file(fdin, BufferLentx);
             };
             break;
             case tx_test:
@@ -1292,25 +1326,23 @@ void *tx_buffer_thread(void *arg)
                 if (Tone == NULL)
                 {
                     Tone = (short *)malloc(BufferLentx * 2 * sizeof(short));
-                      fprintf(stderr,"Init Tone  %d\n",BufferLentx);
+                    fprintf(stderr, "Init Tone  %d\n", BufferLentx);
                     for (size_t i = 0; i < BufferLentx; i++)
                     {
                         Tone[i * 2] = 0x7FFF;
                         Tone[i * 2 + 1] = -0x7FF00;
                     }
                 }
-                //fprintf(stderr,"Tone  %d\n",BufferLentx);
+                // fprintf(stderr,"Tone  %d\n",BufferLentx);
                 write_from_buffer(Tone, BufferLentx);
             };
             break;
             }
-            
         }
         else
         {
             usleep(m_latency);
         }
-
     }
 
     return NULL;
@@ -1387,8 +1419,8 @@ bool SendCommand(char *skey, char *svalue)
 
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
-                      "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots","tx/dvbs2/sr", "tx/dvbs2/agcgain",
-                      "tx/dvbs2/fecmode", ""};
+                      "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/agcgain",
+                      "tx/dvbs2/fecmode", "tx/dvbs2/rxbbframeip", ""};
 enum defidx
 {
     listcmd,
@@ -1405,8 +1437,8 @@ enum defidx
     cmd_txdvbs2pilots,
     cmd_txdvbs2sr,
     cmd_txdvbs2averagegain,
-    cmd_txdvbs2fecmode
-
+    cmd_txdvbs2fecmode,
+    cmd_txdvbs2rxbbframe
 };
 
 bool publishcmd()
@@ -1433,6 +1465,10 @@ void PubTelemetry()
     }
     publish("rx/stream/underflow", (float)Underflow);
     publish("tx/dvbs2/queue", (float)m_bbframe_queue.size());
+    /*
+    extern float gse_efficiency;
+    publish("tx/dvbs2/gseefficiency", gse_efficiency);
+    */
 }
 
 void SaveToFlash(char *SaveFile) // Not working : Fixme !
@@ -1766,7 +1802,7 @@ bool HandleCommand(char *key, char *svalue)
         if (strcmp(svalue, "1") == 0)
             m_Pilots = 1;
         if (strcmp(svalue, "0") == 0)
-             m_Pilots = 0;
+            m_Pilots = 0;
 
         publish("tx/dvbs2/pilots", svalue);
 
@@ -1823,6 +1859,19 @@ bool HandleCommand(char *key, char *svalue)
 
         break;
     }
+
+    case cmd_txdvbs2rxbbframe:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("tx/dvbs2/rxbbframeip", mcast_rxiface);
+            break;
+        }
+        setbbframemcast(svalue);
+        publish("tx/dvbs2/rxbbframeip", mcast_rxiface);
+        break;
+    }
     }
     return true;
 }
@@ -1836,19 +1885,19 @@ bool HandleStatus(char *key, char *svalue)
         {
             m_SR = atol(svalue);
             fprintf(stderr, "New sr %d\n", m_SR);
-            //update_web_param(,m_SR);
+            // update_web_param(,m_SR);
             if (RunRx)
             {
                 RunRx = false; // Dirty trick to let some time to get mutex
-                //InitRxChannel(m_latency);
-                InitRxChannel(fftsize*10,2);
+                // InitRxChannel(m_latency);
+                InitRxChannel(fftsize * 10, 2);
                 RunRx = true;
             }
             else
             {
-                //InitRxChannel(m_latency);
-                InitRxChannel(fftsize*10,2);
-            }    
+                // InitRxChannel(m_latency);
+                InitRxChannel(fftsize * 10, 2);
+            }
         }
     }
     if (strcmp(key, "rx/format") == 0)
@@ -1868,18 +1917,16 @@ bool HandleStatus(char *key, char *svalue)
         if (atol(svalue) != m_SRtx)
         {
             m_SRtx = atol(svalue);
+            
             fprintf(stderr, "New sr %d\n", m_SRtx);
-            // SR Tx Change : Fixme
-            /*
-            if (RunTx)
-            {
-                RunTx = false; // Dirty trick to let some time to get mutex
-                InitTxChannel(m_latencytx);
-                RunTx = true;
-            }
-            else
-                InitTxChannel(m_latencytx);
-            */
+
+            BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
+        //Should be calculated from mm_srtx
+            int nbBuffer=((m_SRtx/2000000)/2)*8;
+            pthread_mutex_lock(&bufpluto_mutextx);
+            InitTxChannel(BufferLentx,nbBuffer>=2?nbBuffer:2); // FIXME 
+            pthread_mutex_unlock(&bufpluto_mutextx);
+            setgsesr(m_SRtx);
         }
     }
     return true;
@@ -1891,7 +1938,7 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
 
     sprintf(sDtRoot, "dt/pluto/%s/", sSerial);
     sprintf(sCmdRoot, "cmd/pluto/%s/", sSerial);
-    fprintf(stderr, "Before thread \n");
+
     build_crc8_table();
 
     udp_init();
@@ -1906,9 +1953,9 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     */
     // typeouput = output_stdout;
     typeouput = output_websocket;
-    //typeouput = output_udp;
-    /*
+    // typeouput = output_udp;
     
+/*
             if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
             {
                 fprintf(stderr, "Rx thread cannot be started\n");
@@ -1917,7 +1964,7 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
             {
                 fprintf(stderr, "Rx thread Started\n");
             }
-    */
+  */  
     if (pthread_create(&(m_tidtx[0]), NULL, &tx_buffer_thread, NULL) != 0)
     {
         fprintf(stderr, "Tx thread cannot be started\n");

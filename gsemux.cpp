@@ -81,8 +81,10 @@ extern u_int16_t udp_init(char *ip, const char *iface, int rx); // interface to 
 size_t udp_receive(u_int16_t sock, unsigned char *b, unsigned int maxlen);
 extern int m_Fecmode;
 extern int m_txmode;
- extern unsigned char  getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate,uint Pilots);
-enum 
+extern unsigned char getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate, uint Pilots);
+
+
+enum
 {
     fec_fix,
     fec_variable
@@ -100,23 +102,21 @@ extern queue<buffer_t *> m_bbframe_queue;
 extern pthread_mutex_t buffer_mutextx;
 //******************************End external
 
-uint8_t m_gsemodcod=0;
+uint8_t m_gsemodcod = 0;
 
-uint m_gseconstellation=0;
-uint    m_gsecoderate=0;
-uint    m_gseframetype=0;
-uint    m_gsepilots=0;
+uint m_gseconstellation = 0;
+uint m_gsecoderate = 0;
+uint m_gseframetype = 0;
+uint m_gsepilots = 0;
 
-size_t m_framelen=0;
+size_t m_framelen = 0;
 char tun_name[] = "gse0";
 int is_debug = 0;
 int tun;
 long m_tun_read_timeout = 100000; // 10ms
-
+uint m_gsesr = 1000000;
 char m_mcast_rxgse[255];
-char  m_mcast_rxiface[255];
-
-
+char m_mcast_rxiface[255];
 
 #define MAX_BBFRAME (58192 / 8)
 
@@ -133,10 +133,12 @@ char  m_mcast_rxiface[255];
 
 char sInterfaceToPluto[255];
 
+
 inline size_t udp_receive(u_int16_t sock, unsigned char *b, unsigned int maxlen)
 {
 
-    size_t rcvlen = recv(sock, b, maxlen, 0 /* MSG_ZEROCOPY*/);
+    size_t rcvlen = 0;
+    rcvlen = recv(sock, b, maxlen, 0 /* MSG_ZEROCOPY*/);
     return rcvlen;
 }
 
@@ -146,9 +148,14 @@ int tun_create(char *name, const char *ip)
     int fd, err;
 
     /* open a file descriptor on the kernel interface */
-    if ((fd = open("/dev/net/tun", O_RDWR)) < 0)
+    char stunpath[255];
+    //sprintf(stunpath,"/dev/net/%s",name);
+    sprintf(stunpath,"/dev/net/tun");
+    if ((fd = open(stunpath, O_RDWR)) < 0)
+    {
+        fprintf(stderr,"Tun error\n");
         return fd;
-
+    }
     /* flags: IFF_TUN   - TUN device (no Ethernet headers)
      *        IFF_TAP   - TAP device
      *        IFF_NO_PI - Do not provide packet information */
@@ -244,6 +251,9 @@ int read_from_tun(int fd, uint8_t *ip_pdu, long timeout) // timeout in us
     timeout = timeout % 1000000L;
     tv.tv_nsec = timeout * 1000L;
 
+    struct timespec start, now;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
     ret = pselect(fd + 1, &readfds, NULL, NULL, timeout > 0 ? &tv : NULL, &sigmask);
     if (ret < 0)
     {
@@ -253,13 +263,17 @@ int read_from_tun(int fd, uint8_t *ip_pdu, long timeout) // timeout in us
     /* timeout */
     else if (ret == 0)
     {
-        // fprintf(stderr, "Timeout: %s", strerror(errno));
+        clock_gettime(CLOCK_MONOTONIC, &now);
+
+        size_t diff_us = (now.tv_sec - start.tv_sec) * 1000000L;
+        diff_us += (now.tv_nsec - start.tv_nsec) / 1000L;
+        // fprintf(stderr,"Diff %u \n",diff_us);
+        // fprintf(stderr, "Timeout: %d\n",diff_us );
         return -1;
     }
     /* There is data */
     else
     {
-
         read_length = read(fd, ip_pdu, GSE_MAX_PDU_LENGTH);
 
         if (read_length < 0)
@@ -271,8 +285,6 @@ int read_from_tun(int fd, uint8_t *ip_pdu, long timeout) // timeout in us
         return (read_length);
     }
 }
-
-
 
 inline void udp_send(u_int16_t sock, char *ip, unsigned char *b, int len)
 {
@@ -306,13 +318,14 @@ enum
 };
 
 // Receive BBFrame from Longmynd and defrag to tun
+u_int16_t m_recv_bbframe_sock = 0;
 void *rx_bbframe_thread(void *arg)
 {
-    u_int16_t recv_bbframe_sock;
+
     size_t read_length;
-    //char recv_bbframe_ip[] = "230.0.0.1:1234";
-    //recv_bbframe_sock = udp_init(recv_bbframe_ip, "192.168.1.104", 1);
-    recv_bbframe_sock = udp_init(m_mcast_rxgse, m_mcast_rxiface, 1);
+    // char recv_bbframe_ip[] = "230.0.0.1:1234";
+    // recv_bbframe_sock = udp_init(recv_bbframe_ip, "192.168.1.104", 1);
+    m_recv_bbframe_sock = udp_init(m_mcast_rxgse, m_mcast_rxiface, 1);
     gse_deencap_t *deencap = NULL;
     gse_deencap_init(QOS_NBR, &deencap);
     gse_deencap_set_offsets(deencap, 4, 0);
@@ -328,18 +341,19 @@ void *rx_bbframe_thread(void *arg)
 
     while (true)
     {
-        if(m_txmode!=tx_dvbs2_gse)
-    {   
-         usleep(1000);   
-        continue;
-    }
+        if (m_txmode != tx_dvbs2_gse)
+        {
+            usleep(1000);
+            continue;
+        }
 
         int length = 0;
         int index = 10;
-        length = udp_receive(recv_bbframe_sock, BBframe, MAX_BBFRAME);
-        // fprintf(stderr,"udep rcv %d\n",length);
+        length = udp_receive(m_recv_bbframe_sock, BBframe, MAX_BBFRAME);
+        // fprintf(stderr,"udep rcv %d on socket %d\n",length,m_recv_bbframe_sock);
+
         if (length < 12)
-            break;
+            continue;
         index = 10;
         while (index < length - 10)
         {
@@ -347,21 +361,21 @@ void *rx_bbframe_thread(void *arg)
             if (ret > GSE_STATUS_OK)
             {
                 fprintf(stderr, "Error when creating reception fragment: %s\n",
-                        gse_get_status(ret));
+                        gse_get_status((gse_status_t)ret));
             }
             int fraglen = (((int)BBframe[index] & 0xF) << 8) + (int)(BBframe[index + 1]) + 2;
             // fprintf(stderr,"Frag len %d Index %d\n",fraglen,index);
             ret = gse_copy_data(vfrag_pkt, BBframe + index, fraglen);
             if (ret > GSE_STATUS_OK)
             {
-                fprintf(stderr, "Error copy %s\n", gse_get_status(ret));
+                fprintf(stderr, "Error copy %s\n", gse_get_status((gse_status_t)ret));
             }
             ret = gse_deencap_packet(vfrag_pkt, deencap, &label_type, label, &protocol,
                                      &pdu, &gse_length);
             if ((ret > GSE_STATUS_OK) && (ret != GSE_STATUS_PDU_RECEIVED))
             {
                 fprintf(stderr, "Error when de-encapsulating GSE packet : %s\n",
-                        gse_get_status(ret));
+                        gse_get_status((gse_status_t)ret));
             }
             if (ret == GSE_STATUS_PDU_RECEIVED)
             {
@@ -370,7 +384,7 @@ void *rx_bbframe_thread(void *arg)
                 if (ret > GSE_STATUS_OK)
                 {
                     fprintf(stderr, "Error when shifting PDU #%u: %s\n",
-                            local_pdu, gse_get_status(ret));
+                            local_pdu, gse_get_status((gse_status_t)ret));
                 }
                 /* build the TUN header */
                 gse_get_vfrag_start(pdu)[0] = 0;
@@ -392,10 +406,6 @@ void *rx_bbframe_thread(void *arg)
         }
     }
 }
-
-
-
-
 
 #define MAX_BBFRAME (58192 / 8)
 
@@ -419,7 +429,6 @@ unsigned int BBFrameLenLut[] = {3072, 5232, 6312, 7032, 9552, 10632, 11712, 1243
                                 16008, 21408, 25728, 32208, 38688, 43040, 48408, 51648, 53840, 57472, 58192};
 */
 
-
 struct bbheader
 {
     uint8_t matype1;
@@ -432,38 +441,35 @@ struct bbheader
     uint8_t crc;
 };
 
-
 #define MAX_QUEUE_ITEM 200
 
-
-bool addgsebbframe(uint8_t *bbframe, size_t len,size_t modcod)
+bool addgsebbframe(uint8_t *bbframe, size_t len, size_t modcod)
 {
-    if(m_txmode!=tx_dvbs2_gse)
-    {   
-        
-         return false;
+    if (m_txmode != tx_dvbs2_gse)
+    {
+
+        return false;
     }
     pthread_mutex_lock(&buffer_mutextx);
     buffer_t *newbuf = (buffer_t *)malloc(sizeof(buffer_t));
     newbuf->size = len;
-    newbuf->modecod=modcod;
-    memcpy(newbuf->bbframe,bbframe,len);
-    
+    newbuf->modecod = modcod;
+    memcpy(newbuf->bbframe, bbframe, len);
+
     if ((m_bbframe_queue.size() >= MAX_QUEUE_ITEM))
     {
-        fprintf(stderr, "MUXGSE : Queue is full ! Purging %d bbframe\n",m_bbframe_queue.size());
-        
-        while (m_bbframe_queue.size()>1)
+        fprintf(stderr, "MUXGSE : Queue is full ! Purging %d bbframe\n", m_bbframe_queue.size());
+
+        while (m_bbframe_queue.size() > 1)
         {
             buffer_t *oldestbuf = m_bbframe_queue.front(); // Remove the oldest
-            
+
             free(oldestbuf);
-            
+
             m_bbframe_queue.pop();
-        }    
+        }
     }
-    
-    
+
     m_bbframe_queue.push(newbuf);
     pthread_mutex_unlock(&buffer_mutextx);
     return true;
@@ -475,8 +481,8 @@ char send_bbframe_ip[] = "230.0.0.2:1234";
 // https://github.com/HAMNET-Access-Protocol/HNAP4PlutoSDR/pull/59
 void *rx_tun_thread(void *arg)
 {
+    float feceffiency[] = {1 / 4.0, 1 / 3.0, 2 / 5.0, 1 / 2.0, 3 / 5.0, 2 / 3.0, 3 / 4.0, 4 / 5.0, 5 / 6.0, 8 / 9.0, 9 / 10.0};
 
-    fprintf(stderr, "Sent gse to %s\n", send_bbframe_ip);
     gse_encap_t *encap = NULL;
     gse_encap_init(4, FIFO_SIZE, &encap);
 
@@ -486,17 +492,20 @@ void *rx_tun_thread(void *arg)
     while (true)
     {
         // int len = read_from_tun(tun, ippacket);
-        if(m_txmode!=tx_dvbs2_gse)
-    {   
-         usleep(1000);   
-        continue;
-    }
+        if (m_txmode != tx_dvbs2_gse)
+        {
+            usleep(1000);
+            continue;
+        }
         gse_vfrag_t *vfrag_pdu = NULL;
 
-        uint16_t framebytes = BBFrameLenLut[((m_gseframetype == 0 ? 11 : 0) + m_gsecoderate+tempcoderate)%22]/8;
-        m_gsemodcod=getdvbs2modcod(m_gseframetype,m_gseconstellation,(m_gsecoderate+tempcoderate)%11,m_gsepilots);
-         
-        //uint16_t framebytes = m_framelen;
+        uint16_t framebytes = BBFrameLenLut[((m_gseframetype == 0 ? 11 : 0) + m_gsecoderate + tempcoderate) % 22] / 8;
+        m_gsemodcod = getdvbs2modcod(m_gseframetype, m_gseconstellation, (m_gsecoderate + tempcoderate) % 11, m_gsepilots);
+
+        m_tun_read_timeout = (framebytes * 8 * 1000L) / (m_gsesr / 4000 * (m_gseconstellation + 2) * feceffiency[(m_gsecoderate + tempcoderate) % 11]);
+        m_tun_read_timeout += 5000; // Margin of 5 ms
+        // fprintf(stderr,"SR %d Framebit %d Eff %f Timeout %ld\n",m_gsesr/4,(framebytes * 8 ),feceffiency[(m_gsecoderate+tempcoderate)%11],m_tun_read_timeout);
+        // uint16_t framebytes = m_framelen;
         unsigned char ippacket[GSE_MAX_PDU_LENGTH];
         unsigned char bbframe[MAX_BBFRAME];
         unsigned char *data = bbframe + 10; // BBHeader
@@ -617,7 +626,7 @@ void *rx_tun_thread(void *arg)
         }
         else if (avail != framebytes - 10) // BBFRAME has space that could be used but was not due to lack of data
         {
-            //fprintf(stderr, "GSE: BBFRAME space wasted. Remaining %hu bytes\n", avail);
+            // fprintf(stderr, "GSE: BBFRAME space wasted. Remaining %hu bytes\n", avail);
         }
 
         data += avail;          // Required to pass the check below (if(data != end))
@@ -632,6 +641,8 @@ void *rx_tun_thread(void *arg)
         header->syncd2 = 0x00;                              // SYNCD
         header->crc = calc_crc8_r(bbframe, 9);              // CRC
 
+        //fprintf(stderr, "dfl %d \n",(framebytes - 10 - avail) );    
+
         if (data != end)
             fprintf(stderr, "GSE: BBFRAME END ISSUE\n");
 
@@ -640,27 +651,31 @@ void *rx_tun_thread(void *arg)
             // fprintf(stderr, "send udp %d \n",framebytes-avail);
             // for (int i = 0; i < 10; i++) fprintf(stderr, "%x ", bbframe[i]);
             // fprintf(stderr, " -> CRC %x\n",calc_crc8(bbframe, 9));
-            //m_gsemodcod=m_gseframetype + m_gseconstellation + m_gsecoderate+tempcoderate;
+            // m_gsemodcod=m_gseframetype + m_gseconstellation + m_gsecoderate+tempcoderate;
 
-            //m_gsemodcod=getdvbs2modcod(m_gseframetype,m_gseconstellation,(m_gsecoderate+tempcoderate)%11,m_gsepilots);
+            // m_gsemodcod=getdvbs2modcod(m_gseframetype,m_gseconstellation,(m_gsecoderate+tempcoderate)%11,m_gsepilots);
 
-            addgsebbframe(bbframe,framebytes /*framebytes - avail*/,m_gsemodcod );
-            if(m_Fecmode==fec_variable)
-            {
+            addgsebbframe(bbframe, framebytes /*framebytes - avail*/, m_gsemodcod);
             
-            tempcoderate=(m_bbframe_queue.size());
-            if(tempcoderate<0) 
-                tempcoderate=0;
-            if(m_gsecoderate+tempcoderate>9)
+            fprintf(stderr, "BBframe efficiency %d \n", ((framebytes - avail) * 100) / framebytes);
+            if (m_Fecmode == fec_variable)
             {
-                
-                tempcoderate=9-m_gsecoderate;
-                
 
-            }     
-            fprintf(stderr,"gse variable : tempcoderate %d coderate = %d\n",tempcoderate,m_gsecoderate+tempcoderate);
+                tempcoderate = (m_bbframe_queue.size());
+                if (tempcoderate < 0)
+                    tempcoderate = 0;
+                if (m_gsecoderate + tempcoderate > 9)
+                {
+
+                    tempcoderate = 9 - m_gsecoderate;
+                }
+                //fprintf(stderr, "gse variable : tempcoderate %d coderate = %d\n", tempcoderate, m_gsecoderate + tempcoderate);
             }
-            //udp_send(send_bbframe_sock, send_bbframe_ip, bbframe, framebytes - avail);
+            else
+            {
+                tempcoderate=0;
+            }
+            
         }
         else
         {
@@ -669,53 +684,57 @@ void *rx_tun_thread(void *arg)
     }
 }
 
-
-
-
-
 void setpaddinggse()
 {
-        
-        static uint8_t BBFrameNull[8000];
-        struct bbheader *header = (struct bbheader *)BBFrameNull;
-            header->matype1 = 0x70; // TS 0.35roff
 
-            header->matype2 = 0;                        // Input Stream Identifier
-            header->upl = 0;               // User Packet Length 188
-            header->dfl = 0; // Data Field Length
-            header->sync = 0;                        // SYNC - Copy of the user packet Sync byte
-            header->syncd1 = 0;         // SYNCD
-            header->syncd2 = 0;       // SYNCD
-            header->crc = calc_crc8_r(BBFrameNull, 9);      // CRC
+    static uint8_t BBFrameNull[8000];
+    struct bbheader *header = (struct bbheader *)BBFrameNull;
+    header->matype1 = 0x70; // TS 0.35roff
 
-            //size_t len = BBFrameLenLut[m_gsemodcod]/8;
-            uint16_t framebytes = BBFrameLenLut[(m_gseframetype == 0 ? 11 : 0) + m_gsecoderate]/8;
-            m_gsemodcod = getdvbs2modcod(m_gseframetype,m_gseconstellation ,m_gsecoderate,m_gsepilots);                       
+    header->matype2 = 0;                       // Input Stream Identifier
+    header->upl = 0;                           // User Packet Length 188
+    header->dfl = 0;                           // Data Field Length
+    header->sync = 0;                          // SYNC - Copy of the user packet Sync byte
+    header->syncd1 = 0;                        // SYNCD
+    header->syncd2 = 0;                        // SYNCD
+    header->crc = calc_crc8_r(BBFrameNull, 9); // CRC
 
-            //uint16_t framebytes = BBFrameLenLut[0]/8; // ShortFrame 1/4
-            //m_gsemodcod = getdvbs2modcod(1/*short*/,m_gseconstellation ,0,m_gsepilots);                       
-            
-            addgsebbframe(BBFrameNull,framebytes,m_gsemodcod );
-      
+    // size_t len = BBFrameLenLut[m_gsemodcod]/8;
+    uint16_t framebytes = BBFrameLenLut[(m_gseframetype == 0 ? 11 : 0) + m_gsecoderate] / 8;
+    m_gsemodcod = getdvbs2modcod(m_gseframetype, m_gseconstellation, m_gsecoderate, m_gsepilots);
+    //fprintf(stderr,"gse padding\n");
+    // uint16_t framebytes = BBFrameLenLut[0]/8; // ShortFrame 1/4
+    // m_gsemodcod = getdvbs2modcod(1/*short*/,m_gseconstellation ,0,m_gsepilots);
 
+    addgsebbframe(BBFrameNull, framebytes, m_gsemodcod);
 }
 
-void setgsemodcod(uint Constellation, uint CodeRate, uint FrameType,uint Pilots)
+void setgsemodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilots)
 {
-   m_gseconstellation=Constellation;
-   m_gsecoderate=CodeRate;
-   m_gseframetype=FrameType;
-   m_gsepilots=Pilots;
+    m_gseconstellation = Constellation;
+    m_gsecoderate = CodeRate;
+    m_gseframetype = FrameType;
+    m_gsepilots = Pilots;
+}
+
+void setgsesr(uint sr)
+{
+    m_gsesr = sr;
+}
+
+void setbbframemcast(char *mcast_rx)
+{
+    m_recv_bbframe_sock = udp_init(mcast_rx, m_mcast_rxiface, 1);
+    fprintf(stderr, "Receive longmynd on %s interface %s sock=%d\n", mcast_rx, m_mcast_rxiface, m_recv_bbframe_sock);
 }
 
 static pthread_t p_rxbbframe;
 static pthread_t p_rxtun;
 
-void init_gsemux(char *mcast_rxgse,char * mcast_rxiface,char *tunip,long tun_read_timeout)
+void init_gsemux(char *mcast_rxgse, char *mcast_rxiface, char *tunip, long tun_read_timeout)
 {
-   
-   
-    //build_crc8_table();
+
+    // build_crc8_table();
     build_crc8_table_r();
     tun = tun_create(tun_name, tunip);
     if (tun < 0)
@@ -724,13 +743,11 @@ void init_gsemux(char *mcast_rxgse,char * mcast_rxiface,char *tunip,long tun_rea
         exit(0);
     }
 
-    strcpy(m_mcast_rxgse,mcast_rxgse);
-     strcpy(m_mcast_rxiface,mcast_rxiface);
-     m_tun_read_timeout=tun_read_timeout;
+    strcpy(m_mcast_rxgse, mcast_rxgse);
+    strcpy(m_mcast_rxiface, mcast_rxiface);
+    m_tun_read_timeout = tun_read_timeout;
     pthread_create(&(p_rxbbframe), NULL, &rx_bbframe_thread, NULL);
     pthread_create(&(p_rxtun), NULL, &rx_tun_thread, NULL);
-   
-    
 }
 
 void end_gsemux()
@@ -738,4 +755,3 @@ void end_gsemux()
     pthread_cancel(p_rxbbframe);
     pthread_cancel(p_rxtun);
 }
-

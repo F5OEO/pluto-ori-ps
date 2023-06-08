@@ -55,6 +55,7 @@ using namespace std;
 
 #define PROGRAM_VERSION "0.0.1"
 static int want_quit = 0;
+char sSerial[255];
 
 void print_usage()
 {
@@ -76,11 +77,7 @@ void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_messag
 	char *svalue = (char *)msg->payload;
 
     FILE *fdserial=NULL;
-    char sSerial[255];
-    fdserial=fopen("/sys/kernel/config/usb_gadget/composite_gadget/strings/0x409/serialnumber","r");
-    fscanf(fdserial,"%s",sSerial);
-    fclose(fdserial);
-
+    
     //fprintf(stderr,"%x %s %s\n",mosq,key,svalue);
 
     char ValidCommand[255];
@@ -119,16 +116,35 @@ int main(int argc, char **argv)
 
     mqttinit();
     size_t count=0;
+    
+    /*
      FILE *fdserial=NULL;
-    char sSerial[255];
+    
     fdserial=fopen("/sys/kernel/config/usb_gadget/composite_gadget/strings/0x409/serialnumber","r");
     
     fscanf(fdserial,"%s",sSerial);
     fclose(fdserial);
+    */
     //fprintf(stderr,"line1:%sline2%s\n",sSerial,sSerial);
     
+FILE *cmd=popen("fw_printenv -n call", "r");
+    char result[255]={0x0};
+    //fgets(result, sizeof(result), cmd); 
+    fscanf(cmd,"%s",result); 
+    if(strcmp(result,"")==0)
+    {
+        strcpy(result,"nocall");
+        
+    } 
+    pclose(cmd);
+
+    strcpy(sSerial,result);
+
+    //fprintf(stderr,"KeyRoot %s\n",sSerial);
+    
     HandleCommandInit(mosq,sSerial);
-   
+
+       
     while(want_quit!=1)
     {
         usleep(100000);
