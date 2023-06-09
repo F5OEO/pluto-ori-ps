@@ -203,6 +203,8 @@ enum
 unsigned int BBFrameLenLut[] = {3072, 5232, 6312, 7032, 9552, 10632, 11712, 12432, 13152, 14232, 0,
                                 16008, 21408, 25728, 32208, 38688, 43040, 48408, 51648, 53840, 57472, 58192};
 
+const char TabFec[][255] = {"1/4", "1/3", "2/5", "1/2", "3/5", "2/3", "3/4", "4/5", "5/6", "8/9", "9/10"};
+
 #define MAX_QUEUE_ITEM 20
 typedef struct
 {
@@ -1467,6 +1469,7 @@ void PubTelemetry()
     publish("rx/stream/underflow", (float)Underflow);
     publish("tx/dvbs2/queue", (float)m_bbframe_queue.size());
     publish("tx/dvbs2/tsbistrate",float(m_SRtx * (m_efficiency / (float)4e6)));
+    publish("tx/dvbs2/fecvariable",(char *)TabFec[m_variable_coderate]);
     /*
     extern float gse_efficiency;
     publish("tx/dvbs2/gseefficiency", gse_efficiency);
@@ -1690,7 +1693,7 @@ bool HandleCommand(char *key, char *svalue)
 
     case cmd_txdvbs2fec:
     {
-        const char TabFec[][255] = {"1/4", "1/3", "2/5", "1/2", "3/5", "2/3", "3/4", "4/5", "5/6", "8/9", "9/10"};
+        
         if (strcmp(svalue, "?") == 0)
         {
             if (m_CodeRate < 11)

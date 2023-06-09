@@ -89,7 +89,7 @@ enum
     C9_10
 };
 int m_ModeCod = C2_3 + longframe;
-
+uint8_t m_variable_coderate;
 #define MAX_QUEUE_ITEM 100
 #define MAX_QUEUE_CHANGEMODCOD 2
 
@@ -317,7 +317,8 @@ void addneonts(uint8_t *tspacket, size_t length)
                 coderate = i;
             extern unsigned char  getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate,uint Pilots);
             unsigned char curmodcod = getdvbs2modcod(fmt.frame_type==0?0:1,fmt.constellation,coderate,fmt.pilots);  
-
+           
+            m_variable_coderate=coderate;
             addbbframe((uint8_t *)bbframeptr, ByteCount, curmodcod);
 
             if ((m_Fecmode == fec_variable) /*&& (m_bbframe_queue.size() >= 2)*/)
