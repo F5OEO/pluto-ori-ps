@@ -1307,9 +1307,10 @@ void *tx_buffer_thread(void *arg)
                     
                     if (m_txmode == tx_dvbs2_ts)
                         setpaddingts();
-                    else
+                    if (m_txmode == tx_dvbs2_gse)
                         setpaddinggse();
-                    // WriteTestBBFrame();
+                        //setpaddingts();
+                    
                 }
             };
             break;

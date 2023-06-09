@@ -83,7 +83,6 @@ extern int m_Fecmode;
 extern int m_txmode;
 extern unsigned char getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate, uint Pilots);
 
-
 enum
 {
     fec_fix,
@@ -109,7 +108,7 @@ uint m_gsecoderate = 0;
 uint m_gseframetype = 0;
 uint m_gsepilots = 0;
 
-uint8_t m_variable_gse_coderate=0;
+uint8_t m_variable_gse_coderate = 0;
 
 size_t m_framelen = 0;
 char tun_name[] = "gse0";
@@ -120,8 +119,8 @@ uint m_gsesr = 1000000;
 char m_mcast_rxgse[255];
 char m_mcast_rxiface[255];
 
-uint32_t m_MaxBBFrameByte=0;
-uint32_t m_UsedBBFrameByte=0;
+uint32_t m_MaxBBFrameByte = 0;
+uint32_t m_UsedBBFrameByte = 0;
 
 #define MAX_BBFRAME (58192 / 8)
 
@@ -138,7 +137,6 @@ uint32_t m_UsedBBFrameByte=0;
 
 char sInterfaceToPluto[255];
 
-
 inline size_t udp_receive(u_int16_t sock, unsigned char *b, unsigned int maxlen)
 {
 
@@ -154,11 +152,11 @@ int tun_create(char *name, const char *ip)
 
     /* open a file descriptor on the kernel interface */
     char stunpath[255];
-    //sprintf(stunpath,"/dev/net/%s",name);
-    sprintf(stunpath,"/dev/net/tun");
+    // sprintf(stunpath,"/dev/net/%s",name);
+    sprintf(stunpath, "/dev/net/tun");
     if ((fd = open(stunpath, O_RDWR)) < 0)
     {
-        fprintf(stderr,"Tun error\n");
+        fprintf(stderr, "Tun error\n");
         return fd;
     }
     /* flags: IFF_TUN   - TUN device (no Ethernet headers)
@@ -480,6 +478,36 @@ bool addgsebbframe(uint8_t *bbframe, size_t len, size_t modcod)
     return true;
 }
 
+void setpaddinggse()
+{
+
+    static uint8_t BBFrameNull[MAX_BBFRAME];
+
+    struct bbheader *header = (struct bbheader *)BBFrameNull;
+    header->matype1 = 0x72; // TS 0.35roff
+
+    header->matype2 = 0;                       // Input Stream Identifier
+    header->upl = htons(0 * 8);                // User Packet Length 188
+    header->dfl = htons(0 * 8);                // Data Field Length
+    header->sync = 0;                          // SYNC - Copy of the user packet Sync byte
+    header->syncd1 = 0;                        // SYNCD
+    header->syncd2 = 0;                        // SYNCD
+    header->crc = calc_crc8_r(BBFrameNull, 9); // CRC
+
+    // size_t len = BBFrameLenLut[m_gsemodcod]/8;
+    // uint16_t framebytes = BBFrameLenLut[(m_gseframetype == 0 ? 11 : 0) + m_gsecoderate] / 8;
+    // m_gsemodcod = getdvbs2modcod(m_gseframetype, m_gseconstellation, m_gsecoderate, m_gsepilots);
+
+    uint16_t framebytes = BBFrameLenLut[0] / 8; // ShortFrame 1/4
+    uint8_t gsemodcod = getdvbs2modcod(1 /*short*/, m_gseconstellation, 0, m_gsepilots);
+    //fprintf(stderr, "gse padding\n");
+    BBFrameNull[10] = 0; // gse padding
+    m_MaxBBFrameByte += framebytes;
+    m_UsedBBFrameByte += 0;
+
+    addgsebbframe(BBFrameNull, framebytes, gsemodcod);
+}
+
 u_int16_t send_bbframe_sock;
 char send_bbframe_ip[] = "230.0.0.2:1234";
 // Receive IP from tun and frag to udp to be processed by pluto_stream
@@ -510,7 +538,7 @@ void *rx_tun_thread(void *arg)
         m_tun_read_timeout = (framebytes * 8 * 1000L) / (m_gsesr / 4000 * (m_gseconstellation + 2) * feceffiency[(m_gsecoderate + tempcoderate) % 11]);
         m_tun_read_timeout += 5000; // Margin of 5 ms
         // fprintf(stderr,"SR %d Framebit %d Eff %f Timeout %ld\n",m_gsesr/4,(framebytes * 8 ),feceffiency[(m_gsecoderate+tempcoderate)%11],m_tun_read_timeout);
-        // uint16_t framebytes = m_framelen;
+        //  uint16_t framebytes = m_framelen;
         unsigned char ippacket[GSE_MAX_PDU_LENGTH];
         unsigned char bbframe[MAX_BBFRAME];
         unsigned char *data = bbframe + 10; // BBHeader
@@ -528,7 +556,7 @@ void *rx_tun_thread(void *arg)
             {
                 size_t gse_pkt_size = gse_get_vfrag_length(gse_pkt_vfrag);
 
-                // fprintf(stderr, "GSE: Got a packet with %lu bytes from previous run\n", gse_pkt_size);
+                 //fprintf(stderr, "GSE: Got a packet with %lu bytes from previous run\n", gse_pkt_size);
 
                 memcpy(data, gse_get_vfrag_start(gse_pkt_vfrag), gse_pkt_size);
 
@@ -556,7 +584,7 @@ void *rx_tun_thread(void *arg)
         int len = 0;
         // Feed in more data if we already drained the FIFO, otherwise skip
 
-        while (avail && ret != GSE_STATUS_LENGTH_TOO_SMALL && ((len = read_from_tun(tun, ippacket, m_tun_read_timeout)) > 0))
+        while ((avail>GSE_MAX_HEADER_LENGTH) && ret != GSE_STATUS_LENGTH_TOO_SMALL && ((len = read_from_tun(tun, ippacket, m_tun_read_timeout)) > 0))
         {
 
             uint8_t *pdu = ippacket + 4; // Tunnel header size
@@ -580,7 +608,7 @@ void *rx_tun_thread(void *arg)
 
             // in_ip.read(1);
 
-            while (avail)
+            while (avail >GSE_MAX_HEADER_LENGTH)
             {
                 gse_vfrag_t *gse_pkt_vfrag;
 
@@ -646,7 +674,7 @@ void *rx_tun_thread(void *arg)
         header->syncd2 = 0x00;                              // SYNCD
         header->crc = calc_crc8_r(bbframe, 9);              // CRC
 
-        //fprintf(stderr, "dfl %d \n",(framebytes - 10 - avail) );    
+        // fprintf(stderr, "dfl %d \n",(framebytes - 10 - avail) );
 
         if (data != end)
         {
@@ -661,60 +689,37 @@ void *rx_tun_thread(void *arg)
             // m_gsemodcod=m_gseframetype + m_gseconstellation + m_gsecoderate+tempcoderate;
 
             // m_gsemodcod=getdvbs2modcod(m_gseframetype,m_gseconstellation,(m_gsecoderate+tempcoderate)%11,m_gsepilots);
-            m_MaxBBFrameByte+=framebytes;
-            m_UsedBBFrameByte+=framebytes - avail;
+            m_MaxBBFrameByte += framebytes;
+            m_UsedBBFrameByte += framebytes - avail;
 
             addgsebbframe(bbframe, framebytes /*framebytes - avail*/, m_gsemodcod);
-            
-            //fprintf(stderr, "BBframe efficiency %d \n", ((framebytes - avail) * 100) / framebytes);
+
+            // fprintf(stderr, "BBframe efficiency %d \n", ((framebytes - avail) * 100) / framebytes);
             if (m_Fecmode == fec_variable)
             {
 
-                tempcoderate = (m_bbframe_queue.size()/2);
+                tempcoderate = (m_bbframe_queue.size() / 2);
                 if (m_gsecoderate + tempcoderate > 9)
-                    tempcoderate = 9 - m_gsecoderate ;
-                
-                //fprintf(stderr, "gse variable : tempcoderate %d coderate = %d\n", tempcoderate, m_gsecoderate + tempcoderate);
+                    tempcoderate = 9 - m_gsecoderate;
+
+                // fprintf(stderr, "gse variable : tempcoderate %d coderate = %d\n", tempcoderate, m_gsecoderate + tempcoderate);
             }
             else
             {
-                tempcoderate=0;
+                tempcoderate = 0;
             }
-            m_variable_gse_coderate=m_gsecoderate + tempcoderate;
+            m_variable_gse_coderate = m_gsecoderate + tempcoderate;
         }
         else
         {
-            // fprintf(stderr, "Lost %d \n",framebytes-avail);
+            /*
+            if(len<=0)
+            {
+                setpaddinggse();
+            }
+            */
         }
     }
-}
-
-void setpaddinggse()
-{
-
-    static uint8_t BBFrameNull[8000];
-    struct bbheader *header = (struct bbheader *)BBFrameNull;
-    header->matype1 = 0x70; // TS 0.35roff
-
-    header->matype2 = 0;                       // Input Stream Identifier
-    header->upl = 0;                           // User Packet Length 188
-    header->dfl = 0;                           // Data Field Length
-    header->sync = 0;                          // SYNC - Copy of the user packet Sync byte
-    header->syncd1 = 0;                        // SYNCD
-    header->syncd2 = 0;                        // SYNCD
-    header->crc = calc_crc8_r(BBFrameNull, 9); // CRC
-
-    // size_t len = BBFrameLenLut[m_gsemodcod]/8;
-    uint16_t framebytes = BBFrameLenLut[(m_gseframetype == 0 ? 11 : 0) + m_gsecoderate] / 8;
-    m_gsemodcod = getdvbs2modcod(m_gseframetype, m_gseconstellation, m_gsecoderate, m_gsepilots);
-    //fprintf(stderr,"gse padding\n");
-    // uint16_t framebytes = BBFrameLenLut[0]/8; // ShortFrame 1/4
-    // m_gsemodcod = getdvbs2modcod(1/*short*/,m_gseconstellation ,0,m_gsepilots);
-
-     m_MaxBBFrameByte+=framebytes;
-     m_UsedBBFrameByte+=0;
-
-    addgsebbframe(BBFrameNull, framebytes, m_gsemodcod);
 }
 
 void setgsemodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilots)

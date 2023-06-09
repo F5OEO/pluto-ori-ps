@@ -8,5 +8,5 @@ extern void setpaddingts();
 extern uint8_t BBFrameNeonBuff[144000] __attribute__((aligned(128)));
 extern uint8_t symbolbuff[144 * 1024] __attribute__((aligned(16)));
 extern void setneonmodcod(uint Constellation,uint CodeRate,uint FrameType,uint Pilots);
-extern uint8_t m_variable_coderate;
+extern uint8_t m_variable_ts_coderate;
 #endif
