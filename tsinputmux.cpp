@@ -43,6 +43,7 @@ typedef struct
 extern queue<buffer_t *> m_bbframe_queue;
 extern pthread_mutex_t buffer_mutextx;
 extern int m_txmode;
+extern uint32_t m_efficiency;
 
 struct bbheader
 {
@@ -335,6 +336,7 @@ void addneonts(uint8_t *tspacket, size_t length)
             {
                 int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
             }
+             m_efficiency = dvbs2neon_control(STREAM0, CONTROL_GET_EFFICIENCY, 0, 0);
             /*
               addbbframe((uint8_t *)bbframeptr, ByteCount,m_ModeCod+(count+1)%2);
 
@@ -526,6 +528,11 @@ void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilot
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
     modulator_mapping(fmt.constellation, CodeRate);
 
+    m_efficiency = dvbs2neon_control(STREAM0, CONTROL_GET_EFFICIENCY, 0, 0);
+		
+		
+		
+    
     // pthread_mutex_unlock(&buffer_mutexts);
 }
 
@@ -555,7 +562,9 @@ void setpaddingts()
     pthread_mutex_unlock(&buffer_mutexts);
 }
 
-//#define COMIT_FW 12345
+#ifndef COMIT_FW
+    #define COMIT_FW "OUT_OF_TREE"
+#endif
 static pthread_t p_rxts;
 void init_tsmux(char *mcast_ts, char *mcast_iface)
 {

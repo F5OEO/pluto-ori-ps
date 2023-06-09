@@ -143,7 +143,7 @@ size_t Underflowtx = 0;
 size_t m_SRtx = 3000000;
 
 size_t m_s2sr = 1000000;
-
+uint32_t m_efficiency=1000000;
 char mcast_rxiface[255]; // mcast ip to receive bbrame from longmynd
 
 enum
@@ -1006,6 +1006,7 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate, uint Pilots)
             //  fprintf(stderr, "Status %d \n", status);
         }
         setneonmodcod(Constellation, CodeRate, FrameType, Pilots);
+        fprintf(stderr, "Efficiency %d NetBitrate = %f !\n", m_efficiency, float(m_SRtx * (m_efficiency / 4e6)));
         // fprintf(stderr, "modocodgse  %d \n", (FrameType == 0 ? 0 : 11) + CodeRate);
         setgsemodcod(Constellation, CodeRate, FrameType, Pilots);
         // fprintf(stderr, "Status dvbs2neon_control %d \n", status);
@@ -1465,6 +1466,7 @@ void PubTelemetry()
     }
     publish("rx/stream/underflow", (float)Underflow);
     publish("tx/dvbs2/queue", (float)m_bbframe_queue.size());
+    publish("tx/dvbs2/tsbistrate",float(m_SRtx * (m_efficiency / (float)4e6)));
     /*
     extern float gse_efficiency;
     publish("tx/dvbs2/gseefficiency", gse_efficiency);
