@@ -109,6 +109,8 @@ uint m_gsecoderate = 0;
 uint m_gseframetype = 0;
 uint m_gsepilots = 0;
 
+uint8_t m_variable_gse_coderate=0;
+
 size_t m_framelen = 0;
 char tun_name[] = "gse0";
 int is_debug = 0;
@@ -117,6 +119,9 @@ long m_tun_read_timeout = 100000; // 10ms
 uint m_gsesr = 1000000;
 char m_mcast_rxgse[255];
 char m_mcast_rxiface[255];
+
+uint32_t m_MaxBBFrameByte=0;
+uint32_t m_UsedBBFrameByte=0;
 
 #define MAX_BBFRAME (58192 / 8)
 
@@ -656,10 +661,12 @@ void *rx_tun_thread(void *arg)
             // m_gsemodcod=m_gseframetype + m_gseconstellation + m_gsecoderate+tempcoderate;
 
             // m_gsemodcod=getdvbs2modcod(m_gseframetype,m_gseconstellation,(m_gsecoderate+tempcoderate)%11,m_gsepilots);
+            m_MaxBBFrameByte+=framebytes;
+            m_UsedBBFrameByte+=framebytes - avail;
 
             addgsebbframe(bbframe, framebytes /*framebytes - avail*/, m_gsemodcod);
             
-            fprintf(stderr, "BBframe efficiency %d \n", ((framebytes - avail) * 100) / framebytes);
+            //fprintf(stderr, "BBframe efficiency %d \n", ((framebytes - avail) * 100) / framebytes);
             if (m_Fecmode == fec_variable)
             {
 
@@ -673,7 +680,7 @@ void *rx_tun_thread(void *arg)
             {
                 tempcoderate=0;
             }
-            
+            m_variable_gse_coderate=m_gsecoderate + tempcoderate;
         }
         else
         {
@@ -703,6 +710,9 @@ void setpaddinggse()
     //fprintf(stderr,"gse padding\n");
     // uint16_t framebytes = BBFrameLenLut[0]/8; // ShortFrame 1/4
     // m_gsemodcod = getdvbs2modcod(1/*short*/,m_gseconstellation ,0,m_gsepilots);
+
+     m_MaxBBFrameByte+=framebytes;
+     m_UsedBBFrameByte+=0;
 
     addgsebbframe(BBFrameNull, framebytes, m_gsemodcod);
 }

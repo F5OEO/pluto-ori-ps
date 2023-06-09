@@ -1468,8 +1468,24 @@ void PubTelemetry()
     }
     publish("rx/stream/underflow", (float)Underflow);
     publish("tx/dvbs2/queue", (float)m_bbframe_queue.size());
-    publish("tx/dvbs2/tsbistrate",float(m_SRtx * (m_efficiency / (float)4e6)));
-    publish("tx/dvbs2/fecvariable",(char *)TabFec[m_variable_coderate]);
+
+    if(m_txmode == tx_dvbs2_ts)
+    {
+        publish("tx/dvbs2/ts/bistrate",float(m_SRtx * (m_efficiency / (float)4e6)));
+        publish("tx/dvbs2/ts/fecvariable",(char *)TabFec[m_variable_ts_coderate]);
+    }    
+    if(m_txmode == tx_dvbs2_gse)
+    {
+    publish("tx/dvbs2/gse/fecvariable",(char *)TabFec[m_variable_gse_coderate]);
+    if(m_MaxBBFrameByte!=0)
+    {
+        publish("tx/dvbs2/gse/efficiency",m_UsedBBFrameByte*100.0/(float)m_MaxBBFrameByte);
+    }    
+    m_MaxBBFrameByte=0;
+    m_UsedBBFrameByte=0;
+
+    }
+    
     /*
     extern float gse_efficiency;
     publish("tx/dvbs2/gseefficiency", gse_efficiency);
