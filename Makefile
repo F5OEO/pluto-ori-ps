@@ -26,6 +26,7 @@ install:
 	cp initdvb.sh $(PAPR_ORI)
 	cp mqtt_ifconfig.sh $(PAPR_ORI)
 	cp mqtt_iptable.sh $(PAPR_ORI)
+	cp mqtt_reboot.sh $(PAPR_ORI)
 	cp passthrough.sh $(PAPR_ORI)
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse

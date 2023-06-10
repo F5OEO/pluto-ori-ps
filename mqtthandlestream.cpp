@@ -1079,12 +1079,12 @@ ssize_t write_bbframe()
     if (m_averagegain > -90.0) // FixMe : Should be max gain
     {
         static float TheoricMER[] = {0, -2.4, -1.2, 0, 1.0, 2.2, 3.2, 4.0, 4.6, 5.2, 6.2, 6.5, 5.5, 6.6, 7.9, 9.4, 10.6, 11.0, 9.0, 10.2, 11.0, 11.6, 12.9, 13.1, 12.6, 13.6, 14.3, 15.7, 16.1};
-        float offsetgain =TheoricMER[buffpluto[1]]-16.1;
+        float offsetgain =TheoricMER[buffpluto[1]&0xF]-6.5;
         if (offsetgain + m_averagegain < 0)
         {
             char svalue[255];
             sprintf(svalue, "%f", offsetgain + m_averagegain);
-            fprintf(stderr, "Offset %f Gain %s for modcod %d\n", offsetgain, svalue, buffpluto[0]);
+            fprintf(stderr, "Offset %f Gain %s for modcod %d\n", offsetgain, svalue, buffpluto[1]);
             SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
         }
         else
