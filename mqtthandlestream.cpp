@@ -148,11 +148,13 @@ char mcast_rxiface[255]; // mcast ip to receive bbrame from longmynd
 
 enum
 {
-    output_stdout,
-    output_udp,
-    output_websocket
+    rx_mode_pass,
+    rx_mode_stdout,
+    rx_mode_udp,
+    rx_mode_websocket,
+
 };
-size_t typeouput = output_stdout;
+size_t rx_mode = rx_mode_pass;
 
 /*
 uchar BBFrameNeonBuff[144000] __attribute__((aligned(128)));
@@ -740,8 +742,11 @@ void *rx_buffer_thread(void *arg)
     remove("/dev/rx1");
     mkfifo("/dev/rx1", 0666);
     // fdout = fopen("/dev/rx1", "wb");
-    InitRxChannel(fftsize * 10, 2);
-    init_fft(fftsize, 30);
+
+    // Fixme : CHange it in setrxmode
+    //InitRxChannel(fftsize * 10, 2);
+    //init_fft(fftsize, 30);
+
     while (true)
     {
 
@@ -749,9 +754,9 @@ void *rx_buffer_thread(void *arg)
         {
             pthread_mutex_lock(&buffer_mutexrx);
 
-            switch (typeouput)
+            switch (rx_mode)
             {
-            case output_stdout:
+            case rx_mode_stdout:
             {
                 int nout = 0;
 
@@ -798,18 +803,23 @@ void *rx_buffer_thread(void *arg)
 
                 break;
             }
-            case output_udp:
+            case rx_mode_udp:
             {
                 RxSize = direct_rx_samples(&RxBuffer);
                 udp_send((char *)RxBuffer, RxSize * 2 * sizeof(short));
             }
             break;
 
-            case output_websocket:
+            case rx_mode_websocket:
             {
                 RxSize = direct_rx_samples(&RxBuffer);
 
                 iqtofft(RxBuffer, RxSize);
+            }
+            break;
+            case rx_mode_pass:
+            {
+                usleep(100000);
             }
             break;
             }
@@ -1066,11 +1076,11 @@ ssize_t write_bbframe()
         fprintf(stderr, "len %d is not mod 8\n", len + 2 + IdxStart + 1);
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    if (m_averagegain > -90.0)
+    if (m_averagegain > -90.0) // FixMe : Should be max gain
     {
         static float TheoricMER[] = {0, -2.4, -1.2, 0, 1.0, 2.2, 3.2, 4.0, 4.6, 5.2, 6.2, 6.5, 5.5, 6.6, 7.9, 9.4, 10.6, 11.0, 9.0, 10.2, 11.0, 11.6, 12.9, 13.1, 12.6, 13.6, 14.3, 15.7, 16.1};
-        float offsetgain = TheoricMER[buffpluto[0] - 0x2c + 11];
-        if (offsetgain + m_averagegain < -20)
+        float offsetgain =TheoricMER[buffpluto[1]]-16.1;
+        if (offsetgain + m_averagegain < 0)
         {
             char svalue[255];
             sprintf(svalue, "%f", offsetgain + m_averagegain);
@@ -1190,7 +1200,7 @@ void SetTxMode(int Mode)
     case tx_test:
     {
         int LatencyMicro = 20000;                    // 20 ms buffer
-        BufferLentx = LatencyMicro * (m_SRtx / 1e6); // 12 because FFT transform
+        BufferLentx = LatencyMicro * (m_SRtx / 1e6); 
         InitTxChannel(BufferLentx, 2);
         SetFPGAMode(false);
     }
@@ -1587,11 +1597,11 @@ bool HandleCommand(char *key, char *svalue)
         if (strcmp(svalue, "?") == 0)
         {
 
-            publish("rx/stream/output_type", (float)typeouput);
+            publish("rx/stream/output_type", (float)rx_mode);
             break;
         }
-        typeouput = atoi(svalue);
-        publish("rx/stream/output_type", (float)typeouput);
+        rx_mode = atoi(svalue);
+        publish("rx/stream/output_type", (float)rx_mode);
         break;
     }
     case cmd_rxstreamburst:
@@ -1973,11 +1983,12 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     fdout = fopen("/dev/rx1", "wb");
     InitRxChannel(20000);
     */
-    // typeouput = output_stdout;
-    typeouput = output_websocket;
-    // typeouput = output_udp;
+    // rx_mode = rx_mode_stdout;
+    //rx_mode = rx_mode_websocket;
+    // rx_mode = rx_mode_udp;
+    rx_mode = rx_mode_pass;
     
-/*
+
             if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
             {
                 fprintf(stderr, "Rx thread cannot be started\n");
@@ -1986,7 +1997,7 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
             {
                 fprintf(stderr, "Rx thread Started\n");
             }
-  */  
+    
     if (pthread_create(&(m_tidtx[0]), NULL, &tx_buffer_thread, NULL) != 0)
     {
         fprintf(stderr, "Tx thread cannot be started\n");
