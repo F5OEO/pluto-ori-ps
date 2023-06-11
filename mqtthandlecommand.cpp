@@ -1038,7 +1038,7 @@ bool HandleCommand(char *key, char *soriginvalue)
         if (strcmp(svalue, "?") != 0)
         {
             SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
-             fprintf(stderr,"Gain %s\n",svalue);
+            
         }
         publishstatus("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", key);
         break;
