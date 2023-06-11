@@ -1993,14 +1993,14 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     FILE *fgain = fopen("/mnt/jffs2/agctable.txt", "r");
     if (fgain != NULL)
     {
-        fprintf(stderr,"AgcTable ");
+        fprintf(stderr, "AgcTable ");
         // fgets(svalue,255,fdread);
         for (int i = 0; i < 29; i++)
         {
             fscanf(fgain, "%f,", &TheoricMER[i]);
-            fprintf(stderr,"%f,",TheoricMER[i]);
+            fprintf(stderr, "%f,", TheoricMER[i]);
         }
-        fprintf(stderr,"\n");
+        fprintf(stderr, "\n");
     }
 
     // udp_set_ip("230.0.0.1:1234", m_iface);
