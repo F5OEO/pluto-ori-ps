@@ -1086,7 +1086,18 @@ ssize_t write_bbframe()
     if (m_averagegain > -90.0) // FixMe : Should be max gain
     {
         static float TheoricMER[] = {0, -2.4, -1.2, 0, 1.0, 2.2, 3.2, 4.0, 4.6, 5.2, 6.2, 6.5, 5.5, 6.6, 7.9, 9.4, 10.6, 11.0, 9.0, 10.2, 11.0, 11.6, 12.9, 13.1, 12.6, 13.6, 14.3, 15.7, 16.1};
-        float offsetgain =TheoricMER[buffpluto[1]&0xF]-6.5;
+        float maxgain=6.5;
+        int modecode=buffpluto[1]&0xF;
+        if((modecode>0)&&(modecode<=11)) // qpsk
+            maxgain=TheoricMER[11]-TheoricMER[1];
+        if((modecode>11)&&(modecode<=17)) // 8psk
+            maxgain=TheoricMER[17]-TheoricMER[12];
+        if((modecode>17)&&(modecode<=23)) // 16apsk
+            maxgain=TheoricMER[23]-TheoricMER[18];
+        if((modecode>23)&&(modecode<=28)) // 32apsk
+            maxgain=TheoricMER[28]-TheoricMER[24];
+    
+        float offsetgain =TheoricMER[buffpluto[1]&0xF]-maxgain;
         if (offsetgain + m_averagegain < 0)
         {
             char svalue[255];
