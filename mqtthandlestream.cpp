@@ -1038,6 +1038,13 @@ ssize_t write_bbframe()
 
     pthread_mutex_lock(&buffer_mutextx);
     pthread_mutex_lock(&bufpluto_mutextx);
+    if (m_txbuf == NULL) 
+    {
+        fprintf(stderr, "mode has changed \n");
+         pthread_mutex_unlock(&buffer_mutextx);
+        pthread_mutex_unlock(&bufpluto_mutextx);
+        return 0;
+    }
     unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
     buffer_t *newbuf = m_bbframe_queue.front();
     ssize_t len = newbuf->size;
