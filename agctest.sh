@@ -105,7 +105,10 @@ rollall() {
     rollcoderatelongqpsk
     echo rollcoderateshortqpsk
     rollcoderateshortqpsk
-   
+ echo rollcoderatelong8psk
+    rollcoderatelong8psk
+
+	   
 }
 
 

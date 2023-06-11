@@ -28,5 +28,6 @@ install:
 	cp mqtt_iptable.sh $(PAPR_ORI)
 	cp mqtt_reboot.sh $(PAPR_ORI)
 	cp passthrough.sh $(PAPR_ORI)
+	cp agctest.sh $(PAPR_ORI)
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse
