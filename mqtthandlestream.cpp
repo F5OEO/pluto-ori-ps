@@ -1089,13 +1089,13 @@ ssize_t write_bbframe()
         float maxgain=6.5;
         int modecode=buffpluto[1]&0xF;
         if((modecode>0)&&(modecode<=11)) // qpsk
-            maxgain=TheoricMER[11]-TheoricMER[1];
+            maxgain=TheoricMER[11];
         if((modecode>11)&&(modecode<=17)) // 8psk
-            maxgain=TheoricMER[17]-TheoricMER[12];
+            maxgain=TheoricMER[17];
         if((modecode>17)&&(modecode<=23)) // 16apsk
-            maxgain=TheoricMER[23]-TheoricMER[18];
+            maxgain=TheoricMER[23];
         if((modecode>23)&&(modecode<=28)) // 32apsk
-            maxgain=TheoricMER[28]-TheoricMER[24];
+            maxgain=TheoricMER[28];
     
         float offsetgain =TheoricMER[buffpluto[1]&0xF]-maxgain;
         if (offsetgain + m_averagegain < 0)
