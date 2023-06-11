@@ -898,6 +898,7 @@ void PubTelemetry()
 bool HandleCommand(char *key, char *soriginvalue)
 {
 
+
     int cmdidx = -1;
     for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
     {
@@ -928,7 +929,7 @@ bool HandleCommand(char *key, char *soriginvalue)
     {
         float fvalue = atof(soriginvalue);
         if (fvalue != 0)
-            sprintf(svalue, "%.0f", fvalue);
+            sprintf(svalue, "%.2f", fvalue);
         else
             strcpy(svalue, soriginvalue); // Not a numerical value
     }
@@ -1035,7 +1036,10 @@ bool HandleCommand(char *key, char *soriginvalue)
     case cmd_txgain:
     {
         if (strcmp(svalue, "?") != 0)
+        {
             SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
+             fprintf(stderr,"Gain %s\n",svalue);
+        }
         publishstatus("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", key);
         break;
     }
