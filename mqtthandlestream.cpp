@@ -143,7 +143,7 @@ size_t Underflowtx = 0;
 size_t m_SRtx = 3000000;
 
 size_t m_s2sr = 1000000;
-uint32_t m_efficiency=1000000;
+uint32_t m_efficiency = 1000000;
 char mcast_rxiface[255]; // mcast ip to receive bbrame from longmynd
 
 enum
@@ -173,8 +173,8 @@ enum
 };
 char s_txmode[255] = "pass";
 int m_txmode = tx_passtrough;
-//int m_txmode = tx_dvbs2_ts;
-// https://github.com/phase4ground/dvb_fpga/blob/master/rtl/inline_config_adapter.vhd
+// int m_txmode = tx_dvbs2_ts;
+//  https://github.com/phase4ground/dvb_fpga/blob/master/rtl/inline_config_adapter.vhd
 enum
 {
     longframe,
@@ -225,6 +225,8 @@ int m_Fecmode = fec_fix;
 
 queue<buffer_t *> m_bbframe_queue;
 
+float TheoricMER[] = {0, -2.4, -1.2, 0, 1.0, 2.2, 3.2, 4.0, 4.6, 5.2, 6.2, 6.5, 5.5, 6.6, 7.9, 9.4, 10.6, 11.0, 9.0, 10.2, 11.0, 11.6, 12.9, 13.1, 12.6, 13.6, 14.3, 15.7, 16.1};
+
 void ResetDVBS2()
 {
 
@@ -264,14 +266,14 @@ void SetFPGAMode(bool dvbs2)
         WriteRegister(switchdest + 0x00, 0x02);
     }
 
-/*
-    fprintf(stderr,"%x %x\n",switchsrc + 0x40,ReadRegister(switchsrc + 0x40));
-    fprintf(stderr,"%x %x\n",switchsrc + 0x44,ReadRegister(switchsrc + 0x44));
-    fprintf(stderr,"%x %x\n",switchsrc + 0x0,ReadRegister(switchsrc + 0x0));
+    /*
+        fprintf(stderr,"%x %x\n",switchsrc + 0x40,ReadRegister(switchsrc + 0x40));
+        fprintf(stderr,"%x %x\n",switchsrc + 0x44,ReadRegister(switchsrc + 0x44));
+        fprintf(stderr,"%x %x\n",switchsrc + 0x0,ReadRegister(switchsrc + 0x0));
 
-    fprintf(stderr,"%x %x\n",switchdest + 0x40,ReadRegister(switchdest + 0x40));
-    fprintf(stderr,"%x %x\n",switchdest + 0x0,ReadRegister(switchdest + 0x0));
-*/    
+        fprintf(stderr,"%x %x\n",switchdest + 0x40,ReadRegister(switchdest + 0x40));
+        fprintf(stderr,"%x %x\n",switchdest + 0x0,ReadRegister(switchdest + 0x0));
+    */
 }
 
 // https://github.com/phase4ground/dvb_fpga/blob/master/third_party/airhdl/dvbs2_encoder_regs.md
@@ -504,14 +506,11 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     get_ad9361_stream_ch(TX, m_tx, 0, &m_tx0_i);
     get_ad9361_stream_ch(TX, m_tx, 1, &m_tx0_q);
 
-    
-
-
     // Change the size of the buffer
     // m_max_len = len;
     char msgerror[255];
     // pthread_mutex_lock(&bufpluto_mutextx);
-    if (m_txbuf!=NULL)
+    if (m_txbuf != NULL)
     {
         iio_buffer_cancel(m_txbuf);
         iio_strerror(errno, msgerror, sizeof(msgerror));
@@ -524,28 +523,26 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
         iio_strerror(errno, msgerror, sizeof(msgerror));
         fprintf(stderr, "channel disable tx %s\n", msgerror);
         m_txbuf = NULL;
-        //SendCommand("/sys/bus/iio/devices/iio:device2/buffer/enable", "0");
-        
+        // SendCommand("/sys/bus/iio/devices/iio:device2/buffer/enable", "0");
     }
     if (len == 0) // We are in passthrough, don't get the stream because it is used externally
     {
         return;
     }
 
-
-    len=((len/8)+1)*8;
+    len = ((len / 8) + 1) * 8;
     int ret = iio_device_set_kernel_buffers_count(m_tx, nbBuffer); // SHould be called BEFORE create_buffer (else not setting)
     iio_strerror(errno, msgerror, sizeof(msgerror));
-        fprintf(stderr, "Kernel count %s\n", msgerror);
+    fprintf(stderr, "Kernel count %s\n", msgerror);
     if (ret != 0)
         fprintf(stderr, "set_kernel_buffers_count issue\n");
     //	printf("* Enabling IIO streaming channels\n");
     iio_channel_enable(m_tx0_i);
     iio_channel_enable(m_tx0_q);
     iio_strerror(errno, msgerror, sizeof(msgerror));
-        fprintf(stderr, "enable buffer %s\n", msgerror);
+    fprintf(stderr, "enable buffer %s\n", msgerror);
     m_txbuf = iio_device_create_buffer(m_tx, len, false);
-    
+
     if (m_txbuf == NULL)
     {
         iio_strerror(errno, msgerror, sizeof(msgerror));
@@ -634,7 +631,7 @@ void InitTxChannel(size_t LatencyMicro)
         BufferLentx = LatencyMicro * (m_SRtx / 1e6); // 12 because FFT transform
 
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        
+
         InitTxChannel(BufferLentx, 2);
 
         fprintf(stderr, "ENd init\n");
@@ -694,7 +691,7 @@ ssize_t direct_rx_samples(short **RxBuffer)
         int ret = iio_device_reg_read(m_rx, 0x80000088, &val);
         if (val & 4)
         {
-            //fprintf(stderr, "!");
+            // fprintf(stderr, "!");
             fflush(stderr);
             Underflow++;
             iio_device_reg_write(m_rx, 0x80000088, val); // Clear bits
@@ -744,8 +741,8 @@ void *rx_buffer_thread(void *arg)
     // fdout = fopen("/dev/rx1", "wb");
 
     // Fixme : CHange it in setrxmode
-    //InitRxChannel(fftsize * 10, 2);
-    //init_fft(fftsize, 30);
+    // InitRxChannel(fftsize * 10, 2);
+    // init_fft(fftsize, 30);
 
     while (true)
     {
@@ -1038,10 +1035,10 @@ ssize_t write_bbframe()
 
     pthread_mutex_lock(&buffer_mutextx);
     pthread_mutex_lock(&bufpluto_mutextx);
-    if (m_txbuf == NULL) 
+    if (m_txbuf == NULL)
     {
         fprintf(stderr, "mode has changed \n");
-         pthread_mutex_unlock(&buffer_mutextx);
+        pthread_mutex_unlock(&buffer_mutextx);
         pthread_mutex_unlock(&bufpluto_mutextx);
         return 0;
     }
@@ -1085,19 +1082,19 @@ ssize_t write_bbframe()
 
     if (m_averagegain > -90.0) // FixMe : Should be max gain
     {
-        static float TheoricMER[] = {0, -2.4, -1.2, 0, 1.0, 2.2, 3.2, 4.0, 4.6, 5.2, 6.2, 6.5, 5.5, 6.6, 7.9, 9.4, 10.6, 11.0, 9.0, 10.2, 11.0, 11.6, 12.9, 13.1, 12.6, 13.6, 14.3, 15.7, 16.1};
-        float maxgain=6.5;
-        int modecode=buffpluto[1]&0xF;
-        if((modecode>0)&&(modecode<=11)) // qpsk
-            maxgain=TheoricMER[11];
-        if((modecode>11)&&(modecode<=17)) // 8psk
-            maxgain=TheoricMER[17];
-        if((modecode>17)&&(modecode<=23)) // 16apsk
-            maxgain=TheoricMER[23];
-        if((modecode>23)&&(modecode<=28)) // 32apsk
-            maxgain=TheoricMER[28];
-    
-        float offsetgain =TheoricMER[buffpluto[1]&0xF]-maxgain;
+
+        float maxgain = 6.5;
+        int modecode = buffpluto[1] & 0xF;
+        if ((modecode > 0) && (modecode <= 11)) // qpsk
+            maxgain = TheoricMER[11];
+        if ((modecode > 11) && (modecode <= 17)) // 8psk
+            maxgain = TheoricMER[17];
+        if ((modecode > 17) && (modecode <= 23)) // 16apsk
+            maxgain = TheoricMER[23];
+        if ((modecode > 23) && (modecode <= 28)) // 32apsk
+            maxgain = TheoricMER[28];
+
+        float offsetgain = TheoricMER[buffpluto[1] & 0xF] - maxgain;
         if (offsetgain + m_averagegain < 0)
         {
             char svalue[255];
@@ -1217,23 +1214,23 @@ void SetTxMode(int Mode)
     case tx_iq:
     case tx_test:
     {
-        int LatencyMicro = 20000;                    // 20 ms buffer
-        BufferLentx = LatencyMicro * (m_SRtx / 1e6); 
+        int LatencyMicro = 20000; // 20 ms buffer
+        BufferLentx = LatencyMicro * (m_SRtx / 1e6);
         InitTxChannel(BufferLentx, 2);
         SetFPGAMode(false);
     }
     break;
     case tx_dvbs2_ts:
     {
-        static int debugbuffer=2;
+        static int debugbuffer = 2;
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        //Should be calculated from mm_srtx
-        int nbBuffer=((m_SRtx/2000000)/2)*8;
-        
-        InitTxChannel(BufferLentx,nbBuffer>=2?nbBuffer:2);
-        //InitTxChannel(BufferLentx,debugbuffer);
-        debugbuffer*=2;
-        
+        // Should be calculated from mm_srtx
+        int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;
+
+        InitTxChannel(BufferLentx, nbBuffer >= 2 ? nbBuffer : 2);
+        // InitTxChannel(BufferLentx,debugbuffer);
+        debugbuffer *= 2;
+
         SetFPGAMode(true);
         ResetDVBS2();
         SetDVBS2Constellation();
@@ -1319,12 +1316,12 @@ void *tx_buffer_thread(void *arg)
                     pthread_mutex_lock(&bufpluto_mutextx);
                    InitTxChannel(BufferLentx,2);
                     pthread_mutex_unlock(&bufpluto_mutextx);
-                 
+
                     usleep(500000);
                     continue;
                      */
                 SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate, m_Pilots);
-                //fprintf(stderr,"Queue %d\n",m_bbframe_queue.size());    
+                // fprintf(stderr,"Queue %d\n",m_bbframe_queue.size());
                 if (!m_bbframe_queue.empty())
                 {
 
@@ -1332,13 +1329,12 @@ void *tx_buffer_thread(void *arg)
                 }
                 else // No more data : need padding
                 {
-                    
+
                     if (m_txmode == tx_dvbs2_ts)
                         setpaddingts();
                     if (m_txmode == tx_dvbs2_gse)
                         setpaddinggse();
-                        //setpaddingts();
-                    
+                    // setpaddingts();
                 }
             };
             break;
@@ -1498,23 +1494,22 @@ void PubTelemetry()
     publish("rx/stream/underflow", (float)Underflow);
     publish("tx/dvbs2/queue", (float)m_bbframe_queue.size());
 
-    if(m_txmode == tx_dvbs2_ts)
+    if (m_txmode == tx_dvbs2_ts)
     {
-        publish("tx/dvbs2/ts/bistrate",float(m_SRtx * (m_efficiency / (float)4e6)));
-        publish("tx/dvbs2/ts/fecvariable",(char *)TabFec[m_variable_ts_coderate]);
-    }    
-    if(m_txmode == tx_dvbs2_gse)
-    {
-    publish("tx/dvbs2/gse/fecvariable",(char *)TabFec[m_variable_gse_coderate]);
-    if(m_MaxBBFrameByte!=0)
-    {
-        publish("tx/dvbs2/gse/efficiency",m_UsedBBFrameByte*100.0/(float)m_MaxBBFrameByte);
-    }    
-    m_MaxBBFrameByte=0;
-    m_UsedBBFrameByte=0;
-
+        publish("tx/dvbs2/ts/bistrate", float(m_SRtx * (m_efficiency / (float)4e6)));
+        publish("tx/dvbs2/ts/fecvariable", (char *)TabFec[m_variable_ts_coderate]);
     }
-    
+    if (m_txmode == tx_dvbs2_gse)
+    {
+        publish("tx/dvbs2/gse/fecvariable", (char *)TabFec[m_variable_gse_coderate]);
+        if (m_MaxBBFrameByte != 0)
+        {
+            publish("tx/dvbs2/gse/efficiency", m_UsedBBFrameByte * 100.0 / (float)m_MaxBBFrameByte);
+        }
+        m_MaxBBFrameByte = 0;
+        m_UsedBBFrameByte = 0;
+    }
+
     /*
     extern float gse_efficiency;
     publish("tx/dvbs2/gseefficiency", gse_efficiency);
@@ -1738,7 +1733,7 @@ bool HandleCommand(char *key, char *svalue)
 
     case cmd_txdvbs2fec:
     {
-        
+
         if (strcmp(svalue, "?") == 0)
         {
             if (m_CodeRate < 11)
@@ -1967,14 +1962,14 @@ bool HandleStatus(char *key, char *svalue)
         if (atol(svalue) != m_SRtx)
         {
             m_SRtx = atol(svalue);
-            
+
             fprintf(stderr, "New sr %d\n", m_SRtx);
 
             BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
-        //Should be calculated from mm_srtx
-            int nbBuffer=((m_SRtx/2000000)/2)*8;
+                                                 // Should be calculated from mm_srtx
+            int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;
             pthread_mutex_lock(&bufpluto_mutextx);
-            InitTxChannel(BufferLentx,nbBuffer>=2?nbBuffer:2); // FIXME 
+            InitTxChannel(BufferLentx, nbBuffer >= 2 ? nbBuffer : 2); // FIXME
             pthread_mutex_unlock(&bufpluto_mutextx);
             setgsesr(m_SRtx);
         }
@@ -1994,6 +1989,20 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     udp_init();
     // strcpy(m_iface, "127.0.0.1");
     strcpy(m_iface, "192.168.2.1");
+
+    FILE *fgain = fopen("/mnt/jffs2/agctable.txt", "r");
+    if (fgain != NULL)
+    {
+        fprintf(stderr,"AgcTable ");
+        // fgets(svalue,255,fdread);
+        for (int i = 0; i < 29; i++)
+        {
+            fscanf(fgain, "%f,", &TheoricMER[i]);
+            fprintf(stderr,"%f,",TheoricMER[i]);
+        }
+        fprintf(stderr,"\n");
+    }
+
     // udp_set_ip("230.0.0.1:1234", m_iface);
     /*
     remove("/dev/rx1");
@@ -2002,20 +2011,19 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     InitRxChannel(20000);
     */
     // rx_mode = rx_mode_stdout;
-    //rx_mode = rx_mode_websocket;
+    // rx_mode = rx_mode_websocket;
     // rx_mode = rx_mode_udp;
     rx_mode = rx_mode_pass;
-    
 
-            if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
-            {
-                fprintf(stderr, "Rx thread cannot be started\n");
-            }
-            else
-            {
-                fprintf(stderr, "Rx thread Started\n");
-            }
-    
+    if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
+    {
+        fprintf(stderr, "Rx thread cannot be started\n");
+    }
+    else
+    {
+        fprintf(stderr, "Rx thread Started\n");
+    }
+
     if (pthread_create(&(m_tidtx[0]), NULL, &tx_buffer_thread, NULL) != 0)
     {
         fprintf(stderr, "Tx thread cannot be started\n");
