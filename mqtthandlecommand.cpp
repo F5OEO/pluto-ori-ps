@@ -126,6 +126,7 @@ bool SendCommand(char *skey, char *svalue)
     }
 
     fprintf(fdwrite, "%s", svalue);
+    
     fclose(fdwrite);
     return true;
 }
@@ -929,7 +930,12 @@ bool HandleCommand(char *key, char *soriginvalue)
     {
         float fvalue = atof(soriginvalue);
         if (fvalue != 0)
-            sprintf(svalue, "%.2f", fvalue);
+        {
+            if((fvalue - floor(fvalue))!=0)
+               sprintf(svalue, "%.2f", fvalue);
+            else   
+            sprintf(svalue, "%.0f", fvalue);
+        }    
         else
             strcpy(svalue, soriginvalue); // Not a numerical value
     }
