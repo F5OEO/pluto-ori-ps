@@ -27,6 +27,7 @@ install:
 	cp mqtt_ifconfig.sh $(PAPR_ORI)
 	cp mqtt_iptable.sh $(PAPR_ORI)
 	cp mqtt_reboot.sh $(PAPR_ORI)
+	cp mqtt_setcall.sh $(PAPR_ORI)
 	cp passthrough.sh $(PAPR_ORI)
 	cp agctest.sh $(PAPR_ORI)
 clean:
