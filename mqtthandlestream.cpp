@@ -1129,56 +1129,7 @@ ssize_t write_bbframe()
     return sent;
 }
 
-void *tx_buffer_fill_thread(void *arg)
-{
-    char mcastaddr[] = "230.0.0.2";
-    int bbframesock;
-    if ((bbframesock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
-    {
-        fprintf(stderr, "Failed to create socket\n");
-    }
-    else
-        fprintf(stderr, "Creating socket\n");
-    u_int yes = 1;
-    // setsockopt(bbframesock, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof(yes));
 
-    struct sockaddr_in client;
-    memset(&client, 0, sizeof(client));              // Clear struct
-    client.sin_family = AF_INET;                     // Internet/IP
-    client.sin_addr.s_addr = inet_addr("230.0.0.2"); // htonl(INADDR_ANY); // inet_addr("230.0.0.2"); // IP address
-    client.sin_port = htons(1234);
-    if (bind(bbframesock, (struct sockaddr *)&client, sizeof(client)) < 0)
-        fprintf(stderr, "bind issue\n");
-
-    struct ip_mreq mreq;
-    mreq.imr_multiaddr.s_addr = inet_addr(mcastaddr);
-    mreq.imr_interface.s_addr = inet_addr("127.0.0.1");
-    // mreq.imr_interface.s_addr = inet_addr("192.168.2.1");
-    if (setsockopt(bbframesock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0)
-        fprintf(stderr, "add member issue %s\n", strerror(errno));
-
-    while (true)
-    {
-        buffer_t *newbuf = (buffer_t *)malloc(sizeof(buffer_t));
-        // newbuf->size = recv(bbframesock, newbuf->bbframe, UDP_BUFF_MAX_BBFRAME, MSG_ZEROCOPY);
-        newbuf->size = recv(bbframesock, newbuf->bbframe, UDP_BUFF_MAX_BBFRAME, 0);
-        newbuf->modecod = m_ModCode;
-        fprintf(stderr, "recv udp %d\n", newbuf->size);
-        pthread_mutex_lock(&buffer_mutextx);
-        if (m_bbframe_queue.size() > MAX_QUEUE_ITEM)
-        {
-            fprintf(stderr, "Queue is full ! \n");
-            buffer_t *oldestbuf = m_bbframe_queue.front(); // Remove the oldest
-            free(oldestbuf);
-            m_bbframe_queue.pop();
-        }
-        m_bbframe_queue.push(newbuf);
-        if (m_Fecmode == fec_variable)
-        {
-        }
-        pthread_mutex_unlock(&buffer_mutextx);
-    }
-}
 
 void GetInterfaceip(char *if_name, char *ip)
 {
@@ -1261,6 +1212,8 @@ void SetTxMode(int Mode)
     iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
     pthread_mutex_unlock(&bufpluto_mutextx);
 }
+
+
 
 void *tx_buffer_thread(void *arg)
 {
@@ -2036,14 +1989,5 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     {
         fprintf(stderr, "Tx thread Started\n");
     }
-    /*
-        if (pthread_create(&(m_tidtxfillbuff[0]), NULL, &tx_buffer_fill_thread, NULL) != 0)
-        {
-            fprintf(stderr, "Tx thread cannot be started\n");
-        }
-        else
-        {
-            fprintf(stderr, "Tx thread Started\n");
-        }
-    */
+    
 }
