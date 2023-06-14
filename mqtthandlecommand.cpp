@@ -881,7 +881,7 @@ void PubTelemetry()
     fdserial = fopen("/sys/firmware/devicetree/base/model", "r");
     fgets(sSerial, 255, fdserial);
     fclose(fdserial);
-    publish("device", sSerial);
+    publish("system/device", sSerial);
     // RSSI
     publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage0_rssi", "rx/rssi");
     // AD TEMPERATURE

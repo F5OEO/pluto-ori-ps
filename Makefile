@@ -10,7 +10,7 @@ CC=$(CROSS_COMPILE)gcc
 FLAGS = -fpermissive -Wall -Wno-write-strings -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -liio -g -mfpu=neon --sysroot=$(SYSROOT) -mfloat-abi=hard
 
 INC=-I./include_gse/gse
-VER=$(shell git log -1 --pretty=format:"%h")
+VER=$(shell git describe --tags)
 
 all: pluto_mqtt_ctrl pluto_stream 
 
