@@ -1487,6 +1487,9 @@ void PubTelemetry()
 {
     char svalue[2500];
     sprintf(svalue, "");
+    
+    sprintf(svalue,"PlutoDVB2-%s(F5OEO)",COMIT_FW);
+    publish("system/version",svalue);
     for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
     {
         HandleCommand(strcmd[i], "?");
@@ -1509,6 +1512,7 @@ void PubTelemetry()
         m_MaxBBFrameByte = 0;
         m_UsedBBFrameByte = 0;
     }
+
 
     /*
     extern float gse_efficiency;

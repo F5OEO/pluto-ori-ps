@@ -1,10 +1,14 @@
 CROSS_COMPILE=arm-linux-gnueabihf-
 SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/plutosdr-fw/buildroot/output/staging
+PAPR_ORI=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/root
+#CROSS_COMPILE=arm-linux-
+#SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/0.37plutosdr-fw/buildroot/output/staging
+#PAPR_ORI=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/root
 CXX=$(CROSS_COMPILE)g++
 CC=$(CROSS_COMPILE)gcc
-HOST_DIR=/home/linuxdev/prog/pluto/firm033/pluto_radar/plutosdr-fw/buildroot/output/host
+#HOST_DIR=/home/linuxdev/prog/pluto/firm033/pluto_radar/plutosdr-fw/buildroot/output/host
 FLAGS = -fpermissive -Wall -Wno-write-strings -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -liio -g -mfpu=neon --sysroot=$(SYSROOT) -mfloat-abi=hard
-PAPR_ORI=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/root
+
 INC=-I./include_gse/gse
 VER=$(shell git log -1 --pretty=format:"%h")
 

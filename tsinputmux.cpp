@@ -578,7 +578,7 @@ void init_tsmux(char *mcast_ts, char *mcast_iface)
     pclose(cmd);
     
     char provider[255]={0x0};
-    sprintf(provider,"F5OEO-PlutoFPGA-%s",COMIT_FW);
+    sprintf(provider,"PlutoDVB2-%s(F5OEO)",COMIT_FW);
     //fprintf(stderr,provider);
      customsdt=sdt_fmt(1,1,1,provider,result);
     int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
