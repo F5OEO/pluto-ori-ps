@@ -1095,7 +1095,7 @@ ssize_t write_bbframe()
             maxgain = TheoricMER[28];
 
         float offsetgain = TheoricMER[buffpluto[1] & 0xF] - maxgain;
-        if (offsetgain + m_averagegain < 0)
+        if (offsetgain <= 0)
         {
             char svalue[255];
             sprintf(svalue, "%f", offsetgain + m_averagegain);
@@ -1129,10 +1129,24 @@ ssize_t write_bbframe()
     return sent;
 }
 
-
-
-void GetInterfaceip(char *if_name, char *ip)
+bool IsPhysicalUp(char *if_name)
 {
+    char sFilePath[255];
+    sprintf(sFilePath,"/sys/class/net/%s/operstate",if_name);
+    
+    FILE *fd=fopen(sFilePath, "r");
+    return (fd!=NULL);
+}
+
+
+bool GetInterfaceip(char *if_name, char *ip)
+{
+
+    if (!IsPhysicalUp(if_name))
+    {
+        fprintf(stderr,"No iface %s\n",if_name);
+         return false;
+    }     
     struct ifreq ifr;
     size_t if_name_len = strlen(if_name);
     if (if_name_len < sizeof(ifr.ifr_name))
@@ -1143,11 +1157,13 @@ void GetInterfaceip(char *if_name, char *ip)
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
 
+    
     ioctl(fd, SIOCGIFADDR, &ifr);
     close(fd);
     struct sockaddr_in *ipaddr = (struct sockaddr_in *)&ifr.ifr_addr;
     printf("IP address: %s\n", inet_ntoa(ipaddr->sin_addr));
     strcpy(ip, inet_ntoa(ipaddr->sin_addr));
+    return true;
 }
 
 void SetTxMode(int Mode)
@@ -1246,7 +1262,14 @@ void *tx_buffer_thread(void *arg)
     int testcoderate = 0;
     SetTxMode(tx_passtrough);
     char ip[255];
-    GetInterfaceip("eth0", ip);
+    if(!GetInterfaceip("eth0", ip)) // Choose first eth0 
+    {
+        GetInterfaceip("usb0", ip);
+        char scommand[255];
+        sprintf(scommand,"ip route add default via %s",ip);
+        system(scommand);
+        
+    }    
     // init_tsmux("230.10.0.1:1234", ip);
     init_tsmux("230.10.0.1:1234", ip);
     init_gsemux("230.0.0.2:1234", ip, "44.0.0.2", 200000);
