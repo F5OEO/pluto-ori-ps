@@ -5,19 +5,23 @@ ptton()
 {
     #PTT on GPIO 0 AND GPIO 2 (GPIO 1 should be not touched)
 	echo 0x27 0x50 > /sys/kernel/debug/iio/iio:device0/direct_reg_access
-	mosquitto_pub -t plutodvb/status/tx -m true
+	echo 1 > /sys/class/gpio/gpio906/value
 }
 
 pttoff()
 {
         echo 0x27 0x00 > /sys/kernel/debug/iio/iio:device0/direct_reg_access
-		mosquitto_pub -t plutodvb/status/tx -m false
+		echo 0 > /sys/class/gpio/gpio906/value
 }
 
 
 echo manual_tx_quad > /sys/bus/iio/devices/iio:device0/calib_mode
 #Manual GPIO
 echo 0x26 0x10 > /sys/kernel/debug/iio/iio:device0/direct_reg_access
+#MIO for plutoplus : MIO start at 906, EMIO at 960
+echo "906" > /sys/class/gpio/export
+echo out > /sys/class/gpio/gpio906/direction
+
 pttoff
 
 loop()
