@@ -1131,11 +1131,20 @@ ssize_t write_bbframe()
 
 bool IsPhysicalUp(char *if_name)
 {
+    bool Isup=false;
     char sFilePath[255];
     sprintf(sFilePath,"/sys/class/net/%s/operstate",if_name);
     
     FILE *fd=fopen(sFilePath, "r");
-    return (fd!=NULL);
+    if(fd==NULL) return false;
+    char sState[255];
+    fscanf(fd,"%s",sState);
+    if(strcmp(sState,"up")==0)
+    {
+        return true;
+    }
+    return false;
+    
 }
 
 
