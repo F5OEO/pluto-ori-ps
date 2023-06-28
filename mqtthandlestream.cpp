@@ -1131,31 +1131,30 @@ ssize_t write_bbframe()
 
 bool IsPhysicalUp(char *if_name)
 {
-    bool Isup=false;
+    bool Isup = false;
     char sFilePath[255];
-    sprintf(sFilePath,"/sys/class/net/%s/operstate",if_name);
-    
-    FILE *fd=fopen(sFilePath, "r");
-    if(fd==NULL) return false;
+    sprintf(sFilePath, "/sys/class/net/%s/operstate", if_name);
+
+    FILE *fd = fopen(sFilePath, "r");
+    if (fd == NULL)
+        return false;
     char sState[255];
-    fscanf(fd,"%s",sState);
-    if(strcmp(sState,"up")==0)
+    fscanf(fd, "%s", sState);
+    if (strcmp(sState, "up") == 0)
     {
         return true;
     }
     return false;
-    
 }
-
 
 bool GetInterfaceip(char *if_name, char *ip)
 {
 
     if (!IsPhysicalUp(if_name))
     {
-        fprintf(stderr,"No iface %s\n",if_name);
-         return false;
-    }     
+        fprintf(stderr, "No iface %s\n", if_name);
+        return false;
+    }
     struct ifreq ifr;
     size_t if_name_len = strlen(if_name);
     if (if_name_len < sizeof(ifr.ifr_name))
@@ -1166,7 +1165,6 @@ bool GetInterfaceip(char *if_name, char *ip)
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
 
-    
     ioctl(fd, SIOCGIFADDR, &ifr);
     close(fd);
     struct sockaddr_in *ipaddr = (struct sockaddr_in *)&ifr.ifr_addr;
@@ -1238,8 +1236,6 @@ void SetTxMode(int Mode)
     pthread_mutex_unlock(&bufpluto_mutextx);
 }
 
-
-
 void *tx_buffer_thread(void *arg)
 {
     short *TxBuffer;
@@ -1271,14 +1267,13 @@ void *tx_buffer_thread(void *arg)
     int testcoderate = 0;
     SetTxMode(tx_passtrough);
     char ip[255];
-    if(!GetInterfaceip("eth0", ip)) // Choose first eth0 
+    if (!GetInterfaceip("eth0", ip)) // Choose first eth0
     {
         GetInterfaceip("usb0", ip);
         char scommand[255];
-        sprintf(scommand,"ip route add default via %s",ip);
+        sprintf(scommand, "ip route add default via %s", ip);
         system(scommand);
-        
-    }    
+    }
     // init_tsmux("230.10.0.1:1234", ip);
     init_tsmux("230.10.0.1:1234", ip);
     init_gsemux("230.0.0.2:1234", ip, "44.0.0.2", 200000);
@@ -1433,7 +1428,7 @@ bool SendCommand(char *skey, char *svalue)
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
                       "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/agcgain",
-                      "tx/dvbs2/fecmode", "tx/dvbs2/rxbbframeip", ""};
+                      "tx/dvbs2/fecmode", "tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", ""};
 enum defidx
 {
     listcmd,
@@ -1451,7 +1446,11 @@ enum defidx
     cmd_txdvbs2sr,
     cmd_txdvbs2averagegain,
     cmd_txdvbs2fecmode,
-    cmd_txdvbs2rxbbframe
+    cmd_txdvbs2rxbbframe,
+    cmd_txdvbs2tsourcemode,
+    cmd_txdvbs2tsourceip,
+    cmd_txdvbs2tsourcefile
+
 };
 
 bool publishcmd()
@@ -1472,9 +1471,9 @@ void PubTelemetry()
 {
     char svalue[2500];
     sprintf(svalue, "");
-    
-    sprintf(svalue,"PlutoDVB2-%s(F5OEO)",COMIT_FW);
-    publish("system/version",svalue);
+
+    sprintf(svalue, "PlutoDVB2-%s(F5OEO)", COMIT_FW);
+    publish("system/version", svalue);
     for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
     {
         HandleCommand(strcmd[i], "?");
@@ -1497,7 +1496,6 @@ void PubTelemetry()
         m_MaxBBFrameByte = 0;
         m_UsedBBFrameByte = 0;
     }
-
 
     /*
     extern float gse_efficiency;
@@ -1906,6 +1904,47 @@ bool HandleCommand(char *key, char *svalue)
         publish("tx/dvbs2/rxbbframeip", mcast_rxiface);
         break;
     }
+
+    case cmd_txdvbs2tsourcemode:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("tx/dvbs2/tssourcemode",(float) m_tssource);
+            break;
+        }
+        settssource(atoi(svalue), NULL);
+        publish("tx/dvbs2/tssourcemode",(float) m_tssource);
+        break;
+    }
+
+    case cmd_txdvbs2tsourceip:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("tx/dvbs2/tssourceaddress", m_mcast_ts);
+            break;
+        }
+        settssource(-1,svalue);
+        publish("tx/dvbs2/tssourceaddress", m_mcast_ts);
+        break;
+    }
+
+     case cmd_txdvbs2tsourcefile:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("tx/dvbs2/tssourcefile", m_ts_filename);
+            break;
+        }
+        settssource(-1,svalue);
+        publish("tx/dvbs2/tssourcefile", m_ts_filename);
+        break;
+    }
+
+
     }
     return true;
 }
@@ -2021,5 +2060,4 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     {
         fprintf(stderr, "Tx thread Started\n");
     }
-    
 }

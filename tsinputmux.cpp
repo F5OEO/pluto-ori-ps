@@ -93,6 +93,16 @@ uint8_t m_variable_ts_coderate;
 #define MAX_QUEUE_ITEM 100
 #define MAX_QUEUE_CHANGEMODCOD 2
 
+
+enum
+{
+    tssource_udp,
+    tssource_file,
+    tssource_pattern
+};
+
+
+
 enum
 {
     tx_passtrough,
@@ -101,6 +111,14 @@ enum
     tx_dvbs2_gse
 
 };
+
+int m_tssource=tssource_udp;
+char m_mcast_ts[255];
+char m_mcast_iface[255];
+char m_ts_filename[255];
+FILE *fdtsinput=NULL;
+int m_FileBitrate=100000;
+int m_LatencySevenPacket=1000;
 
 bool addbbframe(uint8_t *bbframe, size_t len, size_t modcod)
 {
@@ -279,6 +297,11 @@ void addneonts(uint8_t *tspacket, size_t length)
         {
             fprintf(stderr,"Ts input error aligned %x\n",cur_packet[0]);
             return;
+        }
+        if((m_Fecmode == fec_variable)&&(cur_packet[1]&0x1F==0x1F) && (cur_packet[2]==0xFF)) // Remove TS padding
+        {
+
+                //Nothing to add
         }
         if(cur_packet[2]==0x11) //replace sdt
         {
@@ -461,6 +484,98 @@ void addts(uint8_t *tspacket, size_t length)
     }
 }
 
+#define MAX_PID 8191
+#define TS_PACKET_SIZE 188
+#define SYSTEM_CLOCK_FREQUENCY 27000000
+
+int GetTsBitrate()
+{
+	// Courtsy taken from OpenCaster toolbox , GPL
+	int fd_ts; /* File descriptor of ts file */
+	u_short pid;
+	int byte_read;
+	unsigned int pcr_ext = 0;
+	unsigned int ibits = 0;
+	unsigned long long int pcr_base = 0;
+	unsigned long long int ts_packet_count;
+	unsigned long long int new_pcr = 0;
+	unsigned long long int new_pcr_index = 0;
+	unsigned long long int pid_pcr_table[MAX_PID];		 /* PCR table for the TS packets */
+	unsigned long long int pid_pcr_index_table[MAX_PID]; /* PCR index table for the TS packets */
+	unsigned long long int pid_sum[MAX_PID];			 /* Sum of each PID TS packets */
+	unsigned char ts_packet[TS_PACKET_SIZE];			 /* TS packet */
+
+	unsigned long long int TsBitrate = 0;
+
+	
+	/* Start to process the file */
+	memset(pid_pcr_table, 0, MAX_PID * (sizeof(unsigned long long int)));
+	memset(pid_pcr_index_table, 0, MAX_PID * (sizeof(unsigned long long int)));
+	memset(pid_sum, 0, MAX_PID * (sizeof(unsigned long long int)));
+	ts_packet_count = 0;
+	byte_read = 1;
+    int nbnewpcr=0;
+	while (TsBitrate == 0)
+	{
+
+		/* Read next packet */
+
+		byte_read = fread(ts_packet, TS_PACKET_SIZE, 1, fdtsinput);
+		/* check packet */
+		memcpy(&pid, ts_packet + 1, 2);
+		pid = ntohs(pid);
+		pid = pid & 0x1fff;
+		if (pid < MAX_PID)
+		{
+			if ((ts_packet[3] & 0x20) && (ts_packet[4] != 0) && (ts_packet[5] & 0x10))
+			{ /* there is a pcr field */
+				pcr_base = (((unsigned long long int)ts_packet[6]) << 25) + (ts_packet[7] << 17) + (ts_packet[8] << 9) + (ts_packet[9] << 1) + (ts_packet[10] >> 7);
+				pcr_ext = ((ts_packet[10] & 1) << 8) + ts_packet[11];
+				if (pid_pcr_table[pid] == 0)
+				{
+					pid_pcr_table[pid] = pcr_base * 300 + pcr_ext;
+					pid_pcr_index_table[pid] = (ts_packet_count * TS_PACKET_SIZE) + 10;
+					/*fprintf(stdout, "%llu: pid %d, new pcr is %llu (%f sec)\n",
+									pid_pcr_index_table[pid],
+									pid,
+									pid_pcr_table[pid],
+									((double)(pid_pcr_table[pid]) / SYSTEM_CLOCK_FREQUENCY));*/
+				}
+				else
+				{
+                    
+					new_pcr = pcr_base * 300 + pcr_ext;
+					new_pcr_index = (ts_packet_count * TS_PACKET_SIZE) + 10;
+					/*fprintf(stderr, "%llu: pid %d, new pcr is %llu (%f sec), pcr delta is %llu, (%f ms), indices delta is %llu bytes,instant ts bit rate is %.10f\n",
+									new_pcr_index,
+									pid,
+									new_pcr,
+									((double)(new_pcr) / SYSTEM_CLOCK_FREQUENCY),
+									new_pcr - pid_pcr_table[pid],
+									((double)((new_pcr - pid_pcr_table[pid]) * 1000)) / SYSTEM_CLOCK_FREQUENCY,
+									new_pcr_index - pid_pcr_index_table[pid],
+									(((double)(new_pcr_index - pid_pcr_index_table[pid])) * 8 * SYSTEM_CLOCK_FREQUENCY) / ((double)(new_pcr - pid_pcr_table[pid]))
+									);*/
+
+					double ftsbitrate = (((double)(new_pcr_index - pid_pcr_index_table[pid])) * 8 * SYSTEM_CLOCK_FREQUENCY) / ((double)(new_pcr - pid_pcr_table[pid]));
+                    nbnewpcr++;
+                    //if(nbnewpcr>4) //Wait 10 pcr for average
+					    TsBitrate = (unsigned long long int)ftsbitrate;
+					unsigned long long int videobitrate = (TsBitrate * pid_sum[pid]) / ts_packet_count;
+					//fprintf(stderr, "Ts %f %ll Video %ll\n", ftsbitrate, TsBitrate, videobitrate);
+
+					pid_pcr_table[pid] = new_pcr;
+					pid_pcr_index_table[pid] = new_pcr_index;
+				}
+			}
+			pid_sum[pid]++;
+			ts_packet_count++;
+		}
+	}
+     fseek(fdtsinput,0,SEEK_SET);
+	return TsBitrate;
+}
+
 void *rx_ts_thread(void *arg)
 {
     unsigned char tspacket[7 * 188*10];
@@ -469,8 +584,29 @@ void *rx_ts_thread(void *arg)
    
     while (true)
     {
-        length = udp_receive(recv_ts_sock, tspacket, 7 * 188);
-        
+        if(m_tssource==tssource_udp)
+            length = udp_receive(recv_ts_sock, tspacket, 7 * 188);
+
+        if(m_tssource==tssource_file)
+        {
+            if(feof(fdtsinput)) //Loop File
+            {
+                fseek(fdtsinput,0,SEEK_SET);
+            }
+            if(m_bbframe_queue.size()<50)
+            {
+                length = fread(tspacket,1,7*188,fdtsinput);
+                usleep(m_LatencySevenPacket*1000);
+                
+            }
+            else
+            {
+                usleep(m_LatencySevenPacket*1000);
+                continue;
+            }
+                
+            
+        }    
         /*
         int udpsize=0;
         ioctl(recv_ts_sock, FIONREAD, &udpsize);
@@ -541,6 +677,35 @@ void settsmodcode()
 {
 }
 
+void settssource(int tssource,char *arg)
+{   
+    if(tssource!=-1)
+        m_tssource=tssource;
+    if(arg!=NULL)
+    {
+        switch(m_tssource)
+        {
+            case tssource_udp:
+            {
+                  strcpy(m_mcast_ts,arg);  
+                  //fixmme should close previous socket
+                  recv_ts_sock = udp_init(m_mcast_ts, m_mcast_iface, 1);  
+            }
+            break;
+            case tssource_file:
+            {
+                strcpy(m_ts_filename,arg);
+                if(fdtsinput!=NULL) fclose(fdtsinput);
+                fdtsinput=fopen(m_ts_filename,"rb");
+                m_FileBitrate=GetTsBitrate();
+                m_LatencySevenPacket=(1000*7*188*8L)/(long)m_FileBitrate;
+                fprintf(stderr,"File bitrate = %d Latency us %d\n",m_FileBitrate,m_LatencySevenPacket*1000);
+            }
+            break;
+        }
+    }
+}
+
 void setpaddingts()
 {
     static unsigned char NullPacket[7 * 188] = {0x47, 0x1F, 0xFE, 0x10, 'F', '5', 'O', 'E', 'O'};
@@ -589,7 +754,10 @@ void init_tsmux(char *mcast_ts, char *mcast_iface)
     fmt.pilots = PILOTS_OFF;
     fmt.roll_off = RO_0_20;
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
-    recv_ts_sock = udp_init(mcast_ts, NULL /*mcast_iface*/, 1);
+    strcpy(m_mcast_ts,mcast_ts);
+    strcpy(m_mcast_iface,mcast_iface);
+
+    recv_ts_sock = udp_init(m_mcast_ts, m_mcast_iface, 1);
     build_crc8_table_r();
     pthread_mutex_init(&buffer_mutexts, NULL);
     pthread_create(&(p_rxts), NULL, &rx_ts_thread, NULL);
