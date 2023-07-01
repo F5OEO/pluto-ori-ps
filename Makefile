@@ -40,6 +40,7 @@ install:
 	cp passthrough.sh $(PAPR_ORI)
 	cp agctest.sh $(PAPR_ORI)
 	cp watchconsoletx.sh $(PAPR_ORI)
+	./makepatern.sh
 	cp mire.ts $(PAPR_ORI)
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse
