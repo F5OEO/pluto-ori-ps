@@ -65,14 +65,14 @@ enum
 {
     longframe,
     shortframe
-    
+
 };
 enum
 {
     mod_qpsk,
-    mod_8psk ,
+    mod_8psk,
     mod_16apsk,
-    mod_32apsk 
+    mod_32apsk
 };
 enum
 {
@@ -93,15 +93,12 @@ uint8_t m_variable_ts_coderate;
 #define MAX_QUEUE_ITEM 100
 #define MAX_QUEUE_CHANGEMODCOD 2
 
-
 enum
 {
     tssource_udp,
     tssource_file,
     tssource_pattern
 };
-
-
 
 enum
 {
@@ -112,13 +109,13 @@ enum
 
 };
 
-int m_tssource=tssource_udp;
+int m_tssource = tssource_udp;
 char m_mcast_ts[255];
 char m_mcast_iface[255];
 char m_ts_filename[255];
-FILE *fdtsinput=NULL;
-int m_FileBitrate=100000;
-int m_LatencySevenPacket=1000;
+FILE *fdtsinput = NULL;
+int m_FileBitrate = 100000;
+int m_LatencySevenPacket = 1000;
 
 bool addbbframe(uint8_t *bbframe, size_t len, size_t modcod)
 {
@@ -189,7 +186,7 @@ u_int16_t udp_init(char *ip, const char *iface, int rx) // interface to multicas
     struct timeval tv;
     tv.tv_sec = 1;
     tv.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 
     char text[40];
     char *add[2];
@@ -278,38 +275,77 @@ u_int16_t recv_ts_sock;
 pthread_mutex_t buffer_mutexts;
 DVB2FrameFormat tempmodecode;
 uint8_t *customsdt;
-uint8_t* sdt_fmt( int stream_id, int network_id, int service_id, char *service_provider_name, char *service_name );
-void update_cont_counter( uint8_t *b );
+uint8_t *sdt_fmt(int stream_id, int network_id, int service_id, char *service_provider_name, char *service_name);
+void update_cont_counter(uint8_t *b);
+
+void correctcc(uint8_t *tspacket, bool discountinuity)
+{
+    static uint8_t pid_cc_table[8190];
+    static int start = 1;
+    unsigned short pid;
+    if (start == 1)
+    {
+        memset(pid_cc_table, 0x10, 8190);
+        start = 0;
+    }
+
+    memcpy(&pid, tspacket + 1, 2);
+    pid = ntohs(pid);
+    pid = pid & 0x1fff;
+    // fprintf(stderr, "pid entry %d\n", pid);
+    if (pid < 8190)
+    {
+        if (pid_cc_table[pid] == 0x10)
+        {
+            // fprintf(stderr, "new pid entry %d\n", pid);
+            pid_cc_table[pid] = 0;
+        }
+        else
+        {
+            if (((tspacket[3] & 0x30) == 0x10) || ((tspacket[3] & 0x30) == 0x30))
+                pid_cc_table[pid] = (pid_cc_table[pid] + 1) % 0x10;
+            else
+                tspacket[5] = (discountinuity) ? (tspacket[5] & 0x7F) | 0x8 : tspacket[5];
+            // fprintf(stderr, "pid %d cc %d\n", pid,pid_cc_table[pid]);
+        }
+
+        tspacket[3] = (pid_cc_table[pid] | (tspacket[3] & 0xf0));
+    }
+}
+
 void addneonts(uint8_t *tspacket, size_t length)
 {
     unsigned short *bbframeptr = NULL;
     uint8_t *cur_packet = tspacket;
 
-    if(length%188!=0) 
+    if (length % 188 != 0)
     {
-        fprintf(stderr,"Ts input error len %d\n",length);
+        fprintf(stderr, "Ts input error len %d\n", length);
         return;
     }
     for (int i = 0; i < length / 188; i++)
     {
         // pthread_mutex_lock(&buffer_mutexts);
-        if(cur_packet[0]!=0x47)
+        if (cur_packet[0] != 0x47)
         {
-            fprintf(stderr,"Ts input error aligned %x\n",cur_packet[0]);
+            fprintf(stderr, "Ts input error aligned %x\n", cur_packet[0]);
             return;
         }
-        if((m_Fecmode == fec_variable)&&(cur_packet[1]&0x1F==0x1F) && (cur_packet[2]==0xFF)) // Remove TS padding
+        if ((m_Fecmode == fec_variable) && ((cur_packet[1] & 0x1F) == 0x1F) && (cur_packet[2] == 0xFF)) // Remove TS padding
         {
 
-                //Nothing to add
+            // Nothing to add
         }
-        if(cur_packet[2]==0x11) //replace sdt
+        if (cur_packet[2] == 0x11) // replace sdt
         {
-                bbframeptr = /*(unsigned char *)*/dvbs2neon_packet(0, (uint32)(customsdt), 0);
-                update_cont_counter(customsdt);
+            bbframeptr = /*(unsigned char *)*/ dvbs2neon_packet(0, (uint32)(customsdt), 0);
+            update_cont_counter(customsdt);
         }
         else
-                 bbframeptr = /*(unsigned char *)*/dvbs2neon_packet(0, (uint32)(cur_packet), 0);
+        {
+
+            bbframeptr = /*(unsigned char *)*/ dvbs2neon_packet(0, (uint32)(cur_packet), 0);
+        }
         cur_packet += 188;
         if (bbframeptr != NULL)
         {
@@ -330,37 +366,37 @@ void addneonts(uint8_t *tspacket, size_t length)
                 if (BBFrameLenLut2[i] / 8 == ByteCount)
                     break;
             }
-            
+
             int coderate;
             if (i >= 11) // longframe
             {
-                coderate = i - 11  ;
+                coderate = i - 11;
             }
             else
                 coderate = i;
-            extern unsigned char  getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate,uint Pilots);
-            unsigned char curmodcod = getdvbs2modcod(fmt.frame_type==0?0:1,fmt.constellation,coderate,fmt.pilots);  
-           
-            m_variable_ts_coderate=coderate;
+            extern unsigned char getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate, uint Pilots);
+            unsigned char curmodcod = getdvbs2modcod(fmt.frame_type == 0 ? 0 : 1, fmt.constellation, coderate, fmt.pilots);
+
+            m_variable_ts_coderate = coderate;
             addbbframe((uint8_t *)bbframeptr, ByteCount, curmodcod);
 
             if ((m_Fecmode == fec_variable) /*&& (m_bbframe_queue.size() >= 2)*/)
             {
                 tempmodecode = fmt;
-                int fecoffset = (m_bbframe_queue.size() /2);
-                
-                if (fecoffset+tempmodecode.fec > 10)
+                int fecoffset = (m_bbframe_queue.size() / 2);
+
+                if (fecoffset + tempmodecode.fec > 10)
                     tempmodecode.fec = 10;
                 else
-                       tempmodecode.fec+= fecoffset;
-                //fprintf(stderr,"Variable queu %d fec %d\n",m_bbframe_queue.size(),tempmodecode.fec);    
+                    tempmodecode.fec += fecoffset;
+                // fprintf(stderr,"Variable queu %d fec %d\n",m_bbframe_queue.size(),tempmodecode.fec);
                 int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&tempmodecode, 0);
             }
             else
             {
                 int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
             }
-             m_efficiency = dvbs2neon_control(STREAM0, CONTROL_GET_EFFICIENCY, 0, 0);
+            m_efficiency = dvbs2neon_control(STREAM0, CONTROL_GET_EFFICIENCY, 0, 0);
             /*
               addbbframe((uint8_t *)bbframeptr, ByteCount,m_ModeCod+(count+1)%2);
 
@@ -490,123 +526,125 @@ void addts(uint8_t *tspacket, size_t length)
 
 int GetTsBitrate()
 {
-	// Courtsy taken from OpenCaster toolbox , GPL
-	int fd_ts; /* File descriptor of ts file */
-	u_short pid;
-	int byte_read;
-	unsigned int pcr_ext = 0;
-	unsigned int ibits = 0;
-	unsigned long long int pcr_base = 0;
-	unsigned long long int ts_packet_count;
-	unsigned long long int new_pcr = 0;
-	unsigned long long int new_pcr_index = 0;
-	unsigned long long int pid_pcr_table[MAX_PID];		 /* PCR table for the TS packets */
-	unsigned long long int pid_pcr_index_table[MAX_PID]; /* PCR index table for the TS packets */
-	unsigned long long int pid_sum[MAX_PID];			 /* Sum of each PID TS packets */
-	unsigned char ts_packet[TS_PACKET_SIZE];			 /* TS packet */
+    // Courtsy taken from OpenCaster toolbox , GPL
+    int fd_ts; /* File descriptor of ts file */
+    u_short pid;
+    int byte_read;
+    unsigned int pcr_ext = 0;
+    unsigned int ibits = 0;
+    unsigned long long int pcr_base = 0;
+    unsigned long long int ts_packet_count;
+    unsigned long long int new_pcr = 0;
+    unsigned long long int new_pcr_index = 0;
+    unsigned long long int pid_pcr_table[MAX_PID];       /* PCR table for the TS packets */
+    unsigned long long int pid_pcr_index_table[MAX_PID]; /* PCR index table for the TS packets */
+    unsigned long long int pid_sum[MAX_PID];             /* Sum of each PID TS packets */
+    unsigned char ts_packet[TS_PACKET_SIZE];             /* TS packet */
 
-	unsigned long long int TsBitrate = 0;
+    unsigned long long int TsBitrate = 0;
 
-	
-	/* Start to process the file */
-	memset(pid_pcr_table, 0, MAX_PID * (sizeof(unsigned long long int)));
-	memset(pid_pcr_index_table, 0, MAX_PID * (sizeof(unsigned long long int)));
-	memset(pid_sum, 0, MAX_PID * (sizeof(unsigned long long int)));
-	ts_packet_count = 0;
-	byte_read = 1;
-    int nbnewpcr=0;
-	while (TsBitrate == 0)
-	{
+    /* Start to process the file */
+    memset(pid_pcr_table, 0, MAX_PID * (sizeof(unsigned long long int)));
+    memset(pid_pcr_index_table, 0, MAX_PID * (sizeof(unsigned long long int)));
+    memset(pid_sum, 0, MAX_PID * (sizeof(unsigned long long int)));
+    ts_packet_count = 0;
+    byte_read = 1;
+    int nbnewpcr = 0;
+    while (TsBitrate == 0)
+    {
 
-		/* Read next packet */
+        /* Read next packet */
 
-		byte_read = fread(ts_packet, TS_PACKET_SIZE, 1, fdtsinput);
-		/* check packet */
-		memcpy(&pid, ts_packet + 1, 2);
-		pid = ntohs(pid);
-		pid = pid & 0x1fff;
-		if (pid < MAX_PID)
-		{
-			if ((ts_packet[3] & 0x20) && (ts_packet[4] != 0) && (ts_packet[5] & 0x10))
-			{ /* there is a pcr field */
-				pcr_base = (((unsigned long long int)ts_packet[6]) << 25) + (ts_packet[7] << 17) + (ts_packet[8] << 9) + (ts_packet[9] << 1) + (ts_packet[10] >> 7);
-				pcr_ext = ((ts_packet[10] & 1) << 8) + ts_packet[11];
-				if (pid_pcr_table[pid] == 0)
-				{
-					pid_pcr_table[pid] = pcr_base * 300 + pcr_ext;
-					pid_pcr_index_table[pid] = (ts_packet_count * TS_PACKET_SIZE) + 10;
-					/*fprintf(stdout, "%llu: pid %d, new pcr is %llu (%f sec)\n",
-									pid_pcr_index_table[pid],
-									pid,
-									pid_pcr_table[pid],
-									((double)(pid_pcr_table[pid]) / SYSTEM_CLOCK_FREQUENCY));*/
-				}
-				else
-				{
-                    
-					new_pcr = pcr_base * 300 + pcr_ext;
-					new_pcr_index = (ts_packet_count * TS_PACKET_SIZE) + 10;
-					/*fprintf(stderr, "%llu: pid %d, new pcr is %llu (%f sec), pcr delta is %llu, (%f ms), indices delta is %llu bytes,instant ts bit rate is %.10f\n",
-									new_pcr_index,
-									pid,
-									new_pcr,
-									((double)(new_pcr) / SYSTEM_CLOCK_FREQUENCY),
-									new_pcr - pid_pcr_table[pid],
-									((double)((new_pcr - pid_pcr_table[pid]) * 1000)) / SYSTEM_CLOCK_FREQUENCY,
-									new_pcr_index - pid_pcr_index_table[pid],
-									(((double)(new_pcr_index - pid_pcr_index_table[pid])) * 8 * SYSTEM_CLOCK_FREQUENCY) / ((double)(new_pcr - pid_pcr_table[pid]))
-									);*/
+        byte_read = fread(ts_packet, TS_PACKET_SIZE, 1, fdtsinput);
+        /* check packet */
+        memcpy(&pid, ts_packet + 1, 2);
+        pid = ntohs(pid);
+        pid = pid & 0x1fff;
+        if (pid < MAX_PID)
+        {
+            if ((ts_packet[3] & 0x20) && (ts_packet[4] != 0) && (ts_packet[5] & 0x10))
+            { /* there is a pcr field */
+                pcr_base = (((unsigned long long int)ts_packet[6]) << 25) + (ts_packet[7] << 17) + (ts_packet[8] << 9) + (ts_packet[9] << 1) + (ts_packet[10] >> 7);
+                pcr_ext = ((ts_packet[10] & 1) << 8) + ts_packet[11];
+                if (pid_pcr_table[pid] == 0)
+                {
+                    pid_pcr_table[pid] = pcr_base * 300 + pcr_ext;
+                    pid_pcr_index_table[pid] = (ts_packet_count * TS_PACKET_SIZE) + 10;
+                    /*fprintf(stdout, "%llu: pid %d, new pcr is %llu (%f sec)\n",
+                                    pid_pcr_index_table[pid],
+                                    pid,
+                                    pid_pcr_table[pid],
+                                    ((double)(pid_pcr_table[pid]) / SYSTEM_CLOCK_FREQUENCY));*/
+                }
+                else
+                {
 
-					double ftsbitrate = (((double)(new_pcr_index - pid_pcr_index_table[pid])) * 8 * SYSTEM_CLOCK_FREQUENCY) / ((double)(new_pcr - pid_pcr_table[pid]));
+                    new_pcr = pcr_base * 300 + pcr_ext;
+                    new_pcr_index = (ts_packet_count * TS_PACKET_SIZE) + 10;
+                    /*fprintf(stderr, "%llu: pid %d, new pcr is %llu (%f sec), pcr delta is %llu, (%f ms), indices delta is %llu bytes,instant ts bit rate is %.10f\n",
+                                    new_pcr_index,
+                                    pid,
+                                    new_pcr,
+                                    ((double)(new_pcr) / SYSTEM_CLOCK_FREQUENCY),
+                                    new_pcr - pid_pcr_table[pid],
+                                    ((double)((new_pcr - pid_pcr_table[pid]) * 1000)) / SYSTEM_CLOCK_FREQUENCY,
+                                    new_pcr_index - pid_pcr_index_table[pid],
+                                    (((double)(new_pcr_index - pid_pcr_index_table[pid])) * 8 * SYSTEM_CLOCK_FREQUENCY) / ((double)(new_pcr - pid_pcr_table[pid]))
+                                    );*/
+
+                    double ftsbitrate = (((double)(new_pcr_index - pid_pcr_index_table[pid])) * 8 * SYSTEM_CLOCK_FREQUENCY) / ((double)(new_pcr - pid_pcr_table[pid]));
                     nbnewpcr++;
-                    //if(nbnewpcr>4) //Wait 10 pcr for average
-					    TsBitrate = (unsigned long long int)ftsbitrate;
-					unsigned long long int videobitrate = (TsBitrate * pid_sum[pid]) / ts_packet_count;
-					//fprintf(stderr, "Ts %f %ll Video %ll\n", ftsbitrate, TsBitrate, videobitrate);
+                    if (nbnewpcr > 8) // Wait 10 pcr for average
+                        TsBitrate = (unsigned long long int)ftsbitrate;
+                    unsigned long long int videobitrate = (TsBitrate * pid_sum[pid]) / ts_packet_count;
+                    // fprintf(stderr, "Ts %f %ll Video %ll\n", ftsbitrate, TsBitrate, videobitrate);
 
-					pid_pcr_table[pid] = new_pcr;
-					pid_pcr_index_table[pid] = new_pcr_index;
-				}
-			}
-			pid_sum[pid]++;
-			ts_packet_count++;
-		}
-	}
-     fseek(fdtsinput,0,SEEK_SET);
-	return TsBitrate;
+                    pid_pcr_table[pid] = new_pcr;
+                    pid_pcr_index_table[pid] = new_pcr_index;
+                }
+            }
+            pid_sum[pid]++;
+            ts_packet_count++;
+        }
+    }
+    fseek(fdtsinput, 0, SEEK_SET);
+    return TsBitrate;
 }
 
 void *rx_ts_thread(void *arg)
 {
-    unsigned char tspacket[7 * 188*10];
+    unsigned char tspacket[7 * 188 * 10];
 
     int length = 0;
-   
+
     while (true)
     {
-        if(m_tssource==tssource_udp)
+        if (m_tssource == tssource_udp)
             length = udp_receive(recv_ts_sock, tspacket, 7 * 188);
 
-        if(m_tssource==tssource_file)
+        if ((m_tssource == tssource_file) || (m_tssource == tssource_pattern))
         {
-            if(feof(fdtsinput)) //Loop File
+            if (fdtsinput == NULL)
             {
-                fseek(fdtsinput,0,SEEK_SET);
+                usleep(5000);
+                continue;
             }
-            if(m_bbframe_queue.size()<50)
+            if (feof(fdtsinput)) // Loop File
             {
-                length = fread(tspacket,1,7*188,fdtsinput);
-                usleep(m_LatencySevenPacket*1000);
-                
+                fseek(fdtsinput, 0, SEEK_SET);
+                // correctcc(tspacket,true);
+            }
+            if (m_bbframe_queue.size() < 50)
+            {
+                length = fread(tspacket, 1, 7 * 188, fdtsinput);
+                usleep(m_LatencySevenPacket * 1000);
             }
             else
             {
-                usleep(m_LatencySevenPacket*1000);
+                usleep(m_LatencySevenPacket * 1000);
                 continue;
             }
-                
-            
-        }    
+        }
         /*
         int udpsize=0;
         ioctl(recv_ts_sock, FIONREAD, &udpsize);
@@ -617,17 +655,17 @@ void *rx_ts_thread(void *arg)
         }
         */
 
-        //fprintf(stderr,"Udp %d / %d\n",length,udpsize);
-        if(length>0)
-        { 
-        pthread_mutex_lock(&buffer_mutexts);
+        // fprintf(stderr,"Udp %d / %d\n",length,udpsize);
+        if (length > 0)
+        {
+            pthread_mutex_lock(&buffer_mutexts);
 #ifdef WITH_NEON
-        addneonts(tspacket, length);
+            addneonts(tspacket, length);
 #else
-        addts(tspacket, length);
+            addts(tspacket, length);
 #endif
 
-        pthread_mutex_unlock(&buffer_mutexts);
+            pthread_mutex_unlock(&buffer_mutexts);
         }
     }
 }
@@ -666,10 +704,7 @@ void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilot
     modulator_mapping(fmt.constellation, CodeRate);
 
     m_efficiency = dvbs2neon_control(STREAM0, CONTROL_GET_EFFICIENCY, 0, 0);
-		
-		
-		
-    
+
     // pthread_mutex_unlock(&buffer_mutexts);
 }
 
@@ -677,32 +712,51 @@ void settsmodcode()
 {
 }
 
-void settssource(int tssource,char *arg)
-{   
-    if(tssource!=-1)
-        m_tssource=tssource;
-    if(arg!=NULL)
+void settssource(int tssource, char *arg)
+{
+    if (tssource != -1)
     {
-        switch(m_tssource)
-        {
-            case tssource_udp:
-            {
-                  strcpy(m_mcast_ts,arg);  
-                  //fixmme should close previous socket
-                  recv_ts_sock = udp_init(m_mcast_ts, m_mcast_iface, 1);  
-            }
+        m_tssource = tssource;
+        fprintf(stderr, "Change source %d\n", m_tssource);
+    }
+    switch (m_tssource)
+    {
+    case tssource_udp:
+    {
+        if (arg == NULL)
             break;
-            case tssource_file:
-            {
-                strcpy(m_ts_filename,arg);
-                if(fdtsinput!=NULL) fclose(fdtsinput);
-                fdtsinput=fopen(m_ts_filename,"rb");
-                m_FileBitrate=GetTsBitrate();
-                m_LatencySevenPacket=(1000*7*188*8L)/(long)m_FileBitrate;
-                fprintf(stderr,"File bitrate = %d Latency us %d\n",m_FileBitrate,m_LatencySevenPacket*1000);
-            }
+        strcpy(m_mcast_ts, arg);
+        fprintf(stderr, "Try udp %s\n", m_mcast_ts);
+        // fixmme should close previous socket
+        recv_ts_sock = udp_init(m_mcast_ts, m_mcast_iface, 1);
+    }
+    break;
+    case tssource_file:
+    {
+        if (arg == NULL)
             break;
-        }
+        strcpy(m_ts_filename, arg);
+        if (fdtsinput != NULL)
+            fclose(fdtsinput);
+        fdtsinput = fopen(m_ts_filename, "rb");
+        m_FileBitrate = GetTsBitrate();
+
+        m_LatencySevenPacket = (1000 * 7 * 188 * 8L) / (long)m_FileBitrate;
+        fprintf(stderr, "File bitrate = %d Latency us %d\n", m_FileBitrate, m_LatencySevenPacket * 1000);
+    }
+    break;
+    case tssource_pattern:
+    {
+        if (fdtsinput != NULL)
+            fclose(fdtsinput);
+        fdtsinput = fopen("/root/mire.ts", "rb");
+        m_FileBitrate = GetTsBitrate();
+        if (m_FileBitrate > 0)
+            m_LatencySevenPacket = (1000 * 7 * 188 * 8L) / (long)m_FileBitrate;
+
+        fprintf(stderr, "Patern bitrate = %d Latency us %d\n", m_FileBitrate, m_LatencySevenPacket * 1000);
+    }
+    break;
     }
 }
 
@@ -729,23 +783,24 @@ void setpaddingts()
 }
 
 #ifndef COMIT_FW
-    #define COMIT_FW "OUT_OF_TREE"
+#define COMIT_FW "OUT_OF_TREE"
 #endif
 static pthread_t p_rxts;
 void init_tsmux(char *mcast_ts, char *mcast_iface)
 {
 
-    FILE *cmd=popen("fw_printenv -n call", "r");
-    char result[255]={0x0};
-    //fgets(result, sizeof(result), cmd); 
-    fscanf(cmd,"%s",result); 
-    if(strcmp(result,"")==0) strcpy(result,"nocall");
+    FILE *cmd = popen("fw_printenv -n call", "r");
+    char result[255] = {0x0};
+    // fgets(result, sizeof(result), cmd);
+    fscanf(cmd, "%s", result);
+    if (strcmp(result, "") == 0)
+        strcpy(result, "nocall");
     pclose(cmd);
-    
-    char provider[255]={0x0};
-    sprintf(provider,"PlutoDVB2-%s(F5OEO)",COMIT_FW);
-    //fprintf(stderr,provider);
-     customsdt=sdt_fmt(1,1,1,provider,result);
+
+    char provider[255] = {0x0};
+    sprintf(provider, "PlutoDVB2-%s(F5OEO)", COMIT_FW);
+    // fprintf(stderr,provider);
+    customsdt = sdt_fmt(1, 1, 1, provider, result);
     int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
     int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, DATAMODE_TS);
     fmt.fec = 0;
@@ -754,8 +809,8 @@ void init_tsmux(char *mcast_ts, char *mcast_iface)
     fmt.pilots = PILOTS_OFF;
     fmt.roll_off = RO_0_20;
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
-    strcpy(m_mcast_ts,mcast_ts);
-    strcpy(m_mcast_iface,mcast_iface);
+    strcpy(m_mcast_ts, mcast_ts);
+    strcpy(m_mcast_iface, mcast_iface);
 
     recv_ts_sock = udp_init(m_mcast_ts, m_mcast_iface, 1);
     build_crc8_table_r();

@@ -1926,8 +1926,11 @@ bool HandleCommand(char *key, char *svalue)
             publish("tx/dvbs2/tssourceaddress", m_mcast_ts);
             break;
         }
-        settssource(-1,svalue);
-        publish("tx/dvbs2/tssourceaddress", m_mcast_ts);
+        if(m_tssource==0)
+        {
+            settssource(-1,svalue);
+            publish("tx/dvbs2/tssourceaddress", m_mcast_ts);
+        }    
         break;
     }
 
@@ -1939,8 +1942,11 @@ bool HandleCommand(char *key, char *svalue)
             publish("tx/dvbs2/tssourcefile", m_ts_filename);
             break;
         }
-        settssource(-1,svalue);
-        publish("tx/dvbs2/tssourcefile", m_ts_filename);
+        if(m_tssource==1)
+        {
+            settssource(-1,svalue);
+            publish("tx/dvbs2/tssourcefile", m_ts_filename);
+        }    
         break;
     }
 

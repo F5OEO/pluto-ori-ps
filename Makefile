@@ -1,9 +1,13 @@
-CROSS_COMPILE=arm-linux-gnueabihf-
-SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/plutosdr-fw/buildroot/output/staging
-PAPR_ORI=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/root
-#CROSS_COMPILE=arm-linux-
-#SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/0.37plutosdr-fw/buildroot/output/staging
+#FOR 0.33
+#CROSS_COMPILE=arm-linux-gnueabihf-
+#SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/plutosdr-fw/buildroot/output/staging
 #PAPR_ORI=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/root
+#FOR 0.37
+CROSS_COMPILE=arm-linux-
+SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/37plutosdr-fw/buildroot/output/staging
+PAPR_ORI=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/root
+
+
 CXX=$(CROSS_COMPILE)g++
 CC=$(CROSS_COMPILE)gcc
 #HOST_DIR=/home/linuxdev/prog/pluto/firm033/pluto_radar/plutosdr-fw/buildroot/output/host
@@ -36,5 +40,6 @@ install:
 	cp passthrough.sh $(PAPR_ORI)
 	cp agctest.sh $(PAPR_ORI)
 	cp watchconsoletx.sh $(PAPR_ORI)
+	cp mire.ts $(PAPR_ORI)
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse
