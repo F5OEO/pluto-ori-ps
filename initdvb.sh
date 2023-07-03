@@ -14,22 +14,34 @@ Mcast=230.0.0.2
 $(mosquitto_pub -t $cmd_root/tx/gain -m -20)
 $(mosquitto_pub -t $cmd_root/tx/mute -m 0)
 
-$(mosquitto_pub -t $cmd_root/tx/frequency -m 1255e6)
+$(mosquitto_pub -t $cmd_root/tx/frequency -m 2404e6)
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/sr -m 333000)
 $(mosquitto_pub -t $cmd_root/tx/nco -m 000)
 
 
 #$(mosquitto_pub -t $cmd_root/tx/stream/mode -m test)
-#$(mosquitto_pub -t $cmd_root/tx/stream/mode -m dvbs2-ts)
-$(mosquitto_pub -t $cmd_root/tx/stream/mode -m dvbs2-gse)
+$(mosquitto_pub -t $cmd_root/tx/stream/mode -m dvbs2-ts)
+#$(mosquitto_pub -t $cmd_root/tx/stream/mode -m dvbs2-gse)
 
-$(mosquitto_pub -t $cmd_root/tx/dvbs2/fec -m 5/6)
+#udp source
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcemode -m 0)
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourceaddress -m 230.0.0.10:10000)
+#filesource
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcemode -m 1)
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcefile -m /root/remote/pluto_dvb/f9zg.ts)
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcefile -m /root/remote/pluto_dvb/bunny450.ts)
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcefile -m /root/remote/pluto_dvb/dh1rk.ts)
+#pattern
+$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcemode -m 2)
+
+
+$(mosquitto_pub -t $cmd_root/tx/dvbs2/fec -m 2/3)
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/constel -m qpsk)
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/pilots -m 1)
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/frame -m short)
 #$(mosquitto_pub -t $cmd_root/tx/dvbs2/frame -m long)
-#$(mosquitto_pub -t $cmd_root/tx/dvbs2/fecmode -m variable)
-#$(mosquitto_pub -t $cmd_root/tx/dvbs2/agcgain -m -25.0)
+$(mosquitto_pub -t $cmd_root/tx/dvbs2/fecmode -m variable)
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/gainvariable -m 1)
 
 
 $(mosquitto_pub -t $cmd_root/rx/frequency -m 745e6)
@@ -38,7 +50,14 @@ $(mosquitto_pub -t $cmd_root/rx/gain -m 45.0)
 # ****************************
 # Receiver Lognmynd for F5OEO with mqtt
 # ****************************
-#./setrx.sh 744750 1000
+
+$(mosquitto_pub -t $cmd_root/system/longmynd -m on)
+sleep 1
+$(mosquitto_pub -t cmd/longmynd/frequency -m 2404000)
+$(mosquitto_pub -t cmd/longmynd/sr -m 333)
+$(mosquitto_pub -t cmd/longmynd/swport -m 0)
+$(mosquitto_pub -t cmd/longmynd/tsip -m 230.0.0.2)
+
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/rxbbframeip -m $Mcast:1234)
 $(mosquitto_pub -t $cmd_root/ip/tunadress -m "$tunip")
 
