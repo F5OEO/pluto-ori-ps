@@ -6,7 +6,7 @@
 CROSS_COMPILE=arm-linux-
 SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/37plutosdr-fw/buildroot/output/staging
 PAPR_ORI=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/root
-
+PAPR_WWW=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/www
 
 CXX=$(CROSS_COMPILE)g++
 CC=$(CROSS_COMPILE)gcc
@@ -42,5 +42,6 @@ install:
 	cp watchconsoletx.sh $(PAPR_ORI)
 	./makepatern.sh
 	cp mire.ts $(PAPR_ORI)
+	cp www/* -r $(PAPR_WWW)
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse
