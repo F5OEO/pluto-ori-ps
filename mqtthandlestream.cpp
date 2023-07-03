@@ -133,7 +133,7 @@ static int m_offset;  // Current offset into the buffer
 size_t m_latency = 20000; // Latency at 80ms by default
 size_t Underflow = 0;
 size_t m_SR = 3000000;
-float m_averagegain = -100.0; // Impossible gain, means not AGC
+float m_maxgain = -100.0; // Impossible gain, means not AGC
 
 int m_sock;
 struct sockaddr_in m_client;
@@ -173,6 +173,9 @@ enum
 };
 char s_txmode[255] = "pass";
 int m_txmode = tx_passtrough;
+
+int m_gainvariable=0;
+
 // int m_txmode = tx_dvbs2_ts;
 //  https://github.com/phase4ground/dvb_fpga/blob/master/rtl/inline_config_adapter.vhd
 enum
@@ -1080,7 +1083,7 @@ ssize_t write_bbframe()
         fprintf(stderr, "len %d is not mod 8\n", len + 2 + IdxStart + 1);
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    if (m_averagegain > -90.0) // FixMe : Should be max gain
+    if (m_gainvariable ==1 ) // FixMe : Should be max gain
     {
 
         float maxgain = 6.5;
@@ -1098,13 +1101,13 @@ ssize_t write_bbframe()
         if (offsetgain <= 0)
         {
             char svalue[255];
-            sprintf(svalue, "%f", offsetgain + m_averagegain);
-            fprintf(stderr, "Offset %f Gain %s for modcod %d\n", offsetgain, svalue, buffpluto[1]);
+            sprintf(svalue, "%f", offsetgain + m_maxgain);
+            //fprintf(stderr, "Offset %f Gain %s for modcod %d\n", offsetgain, svalue, buffpluto[1]);
             SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
         }
         else
         {
-            fprintf(stderr, "Too much gain offset %f %f\n", offsetgain, offsetgain + m_averagegain);
+            fprintf(stderr, "Too much gain offset %f %f\n", offsetgain, offsetgain + m_maxgain);
         }
     }
 
@@ -1427,8 +1430,8 @@ bool SendCommand(char *skey, char *svalue)
 
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
-                      "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/agcgain",
-                      "tx/dvbs2/fecmode", "tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", ""};
+                      "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable",
+                      "tx/dvbs2/fecmode", "tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain", ""};
 enum defidx
 {
     listcmd,
@@ -1444,12 +1447,13 @@ enum defidx
     cmd_txdvbs2frame,
     cmd_txdvbs2pilots,
     cmd_txdvbs2sr,
-    cmd_txdvbs2averagegain,
+    cmd_txdvbs2gainvariable,
     cmd_txdvbs2fecmode,
     cmd_txdvbs2rxbbframe,
     cmd_txdvbs2tsourcemode,
     cmd_txdvbs2tsourceip,
-    cmd_txdvbs2tsourcefile
+    cmd_txdvbs2tsourcefile,
+    cmd_txgain
 
 };
 
@@ -1853,19 +1857,33 @@ bool HandleCommand(char *key, char *svalue)
 
         break;
     }
-    case cmd_txdvbs2averagegain:
+    case cmd_txdvbs2gainvariable:
     {
         if (strcmp(svalue, "?") == 0)
         {
-            publish("tx/dvbs2/agcgain", m_averagegain);
+            publish("tx/dvbs2/gainvariable", m_gainvariable);
             break;
         }
-        m_averagegain = atof(svalue);
-        fprintf(stderr, "Average gain %f\n", m_averagegain);
-        publish("tx/dvbs2/agcgain", m_averagegain);
+        m_gainvariable= atoi(svalue);
+        publish("tx/dvbs2/gainvariable", m_gainvariable);
+
 
         break;
     }
+
+    case cmd_txgain:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+            
+            break;
+        }
+        // Get the gain as the max for a variable gain
+        m_maxgain= atof(svalue);
+        
+        break;
+    }
+
     case cmd_txdvbs2fecmode:
     {
         if (strcmp(svalue, "?") == 0)
