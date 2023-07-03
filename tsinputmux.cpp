@@ -333,7 +333,9 @@ void addneonts(uint8_t *tspacket, size_t length)
         }
         if ((m_Fecmode == fec_variable) && ((cur_packet[1] & 0x1F) == 0x1F) && (cur_packet[2] == 0xFF)) // Remove TS padding
         {
-
+            cur_packet += 188;
+             
+            continue;
             // Nothing to add
         }
         if (cur_packet[2] == 0x11) // replace sdt
