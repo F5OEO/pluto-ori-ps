@@ -44,8 +44,12 @@ $(mosquitto_pub -t $cmd_root/tx/dvbs2/fecmode -m variable)
 #$(mosquitto_pub -t $cmd_root/tx/dvbs2/gainvariable -m 1)
 
 
-$(mosquitto_pub -t $cmd_root/rx/frequency -m 745e6)
+$(mosquitto_pub -t $cmd_root/rx/frequency -m 2404e6)
 $(mosquitto_pub -t $cmd_root/rx/gain -m 45.0)
+
+#$(mosquitto_pub -t $cmd_root/rx/stream/mode -m pass)
+$(mosquitto_pub -t $cmd_root/rx/stream/mode -m webfft)
+
 
 # ****************************
 # Receiver Lognmynd for F5OEO with mqtt

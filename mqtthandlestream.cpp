@@ -100,7 +100,7 @@ size_t BufferLentx = 0;
 static pthread_t m_tid[1];
 static bool RunRx = true;
 pthread_mutex_t buffer_mutexrx;
-
+pthread_mutex_t bufpluto_mutexrx;
 // ************ Tx Thread *********************
 static pthread_t m_tidtx[1];
 static bool RunTx = true;
@@ -154,7 +154,8 @@ enum
     rx_mode_websocket,
 
 };
-size_t rx_mode = rx_mode_pass;
+char s_rxmode[255] = "pass";
+size_t m_rxmode = rx_mode_pass;
 
 /*
 uchar BBFrameNeonBuff[144000] __attribute__((aligned(128)));
@@ -469,14 +470,17 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
         iio_buffer_destroy(m_rxbuf);
         m_rxbuf = NULL;
     }
-
+    if (len == 0) // We are in passthrough, don't get the stream because it is used externally
+    {
+        return;
+    }
     iio_device_set_kernel_buffers_count(m_rx, nbBuffer); // SHould be called BEFORE create_buffer (else not setting)
 
     //	printf("* Enabling IIO streaming channels\n");
     iio_channel_enable(m_rx0_i);
     iio_channel_enable(m_rx0_q);
 
-    fmc_set_loopback(true, LOOPBACK_TX2RX);
+    //fmc_set_loopback(true, LOOPBACK_TX2RX);
 
     m_rxbuf = iio_device_create_buffer(m_rx, len, false);
 
@@ -494,6 +498,7 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
         fprintf(stderr, "Failed to clearn DMA status register: %s\n",
                 strerror(-ret));
     }
+       fprintf(stderr, "Rx Stream with %u buffers of %d samples\n", nbBuffer, len);
 }
 extern bool SendCommand(char *skey, char *svalue);
 void InitTxChannel(size_t len, unsigned int nbBuffer)
@@ -673,6 +678,7 @@ static uint64_t _timestamp_ns(void)
 ssize_t direct_rx_samples(short **RxBuffer)
 {
     ssize_t nsamples_rx = 0;
+    pthread_mutex_lock(&bufpluto_mutexrx);
     if (burstsizerx == 0) // Count only if no burstsizerx as in burtsmode we knwow that we are missing frames
     {
         // uint64_t T0 = _timestamp_ns();
@@ -726,7 +732,35 @@ ssize_t direct_rx_samples(short **RxBuffer)
         // while (underflow == true);
         *RxBuffer = (short *)iio_buffer_start(m_rxbuf);
     }
+    pthread_mutex_unlock(&bufpluto_mutexrx);
     return nsamples_rx;
+}
+
+
+void SetRxMode(int Mode)
+{
+    pthread_mutex_lock(&bufpluto_mutexrx);
+
+    switch (Mode)
+    {
+    case rx_mode_pass:
+    {
+        InitRxChannel(0, 0);
+        
+    }
+    break;
+    case rx_mode_websocket:
+    {
+       InitRxChannel(fftsize * 30, 2);
+       init_fft(fftsize, 10); 
+       
+    }
+    break;
+    }
+    m_rxmode = Mode;
+    fprintf(stderr, "Change rx mode %d\n", m_rxmode);
+    
+    pthread_mutex_unlock(&bufpluto_mutexrx);
 }
 
 void *rx_buffer_thread(void *arg)
@@ -754,7 +788,7 @@ void *rx_buffer_thread(void *arg)
         {
             pthread_mutex_lock(&buffer_mutexrx);
 
-            switch (rx_mode)
+            switch (m_rxmode)
             {
             case rx_mode_stdout:
             {
@@ -1225,7 +1259,7 @@ void SetTxMode(int Mode)
     break;
     }
     m_txmode = Mode;
-    fprintf(stderr, "Change mode %d\n", m_txmode);
+    fprintf(stderr, "Change txmode %d\n", m_txmode);
 
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
@@ -1428,7 +1462,7 @@ bool SendCommand(char *skey, char *svalue)
     return true;
 }
 
-char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst",
+char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst","rx/stream/mode",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
                       "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable",
                       "tx/dvbs2/fecmode", "tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain", ""};
@@ -1439,6 +1473,7 @@ enum defidx
     cmd_rxstreamudpadd,
     cmd_rxstreamoutputtype,
     cmd_rxstreamburst,
+    cmd_rxstreammode,
     cmd_rxstreamaverage,
     cmd_txstreamrun,
     cmd_txstreammode,
@@ -1596,6 +1631,7 @@ bool HandleCommand(char *key, char *svalue)
         publish("rx/stream/udp_addr_port", m_addport);
         break;
     }
+    /*
     case cmd_rxstreamoutputtype:
     {
         if (strcmp(svalue, "?") == 0)
@@ -1607,7 +1643,7 @@ bool HandleCommand(char *key, char *svalue)
         rx_mode = atoi(svalue);
         publish("rx/stream/output_type", (float)rx_mode);
         break;
-    }
+    }*/
     case cmd_rxstreamburst:
     {
         if (strcmp(svalue, "?") == 0)
@@ -1620,6 +1656,40 @@ bool HandleCommand(char *key, char *svalue)
         publish("rx/stream/burst", (float)burstsizerx);
         break;
     }
+
+    case cmd_rxstreammode:
+    {
+        
+         if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("rx/stream/mode", s_rxmode);
+            break;
+        }
+        
+        if ((strcmp(svalue, "pass") == 0))
+        {
+            if (m_rxmode != rx_mode_pass)
+            {
+                SetRxMode(rx_mode_pass);
+                publish("rx/stream/mode", s_rxmode);
+                strcpy(s_rxmode, svalue);
+            }
+            break;
+        }
+        if ((strcmp(svalue, "webfft") == 0))
+        {
+            if (m_rxmode != rx_mode_websocket)
+            {
+                SetRxMode(rx_mode_websocket);
+                publish("rx/stream/mode", s_rxmode);
+                strcpy(s_rxmode, svalue);
+            }
+            break;
+        }
+        break;
+    }
+
     case cmd_rxstreamaverage:
     {
         if (strcmp(svalue, "?") == 0)
@@ -1983,6 +2053,7 @@ bool HandleStatus(char *key, char *svalue)
             m_SR = atol(svalue);
             fprintf(stderr, "New sr %d\n", m_SR);
             // update_web_param(,m_SR);
+            /*
             if (RunRx)
             {
                 RunRx = false; // Dirty trick to let some time to get mutex
@@ -1994,7 +2065,7 @@ bool HandleStatus(char *key, char *svalue)
             {
                 // InitRxChannel(m_latency);
                 InitRxChannel(fftsize * 10, 2);
-            }
+            }*/
         }
     }
     if (strcmp(key, "rx/format") == 0)
@@ -2065,7 +2136,7 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     // rx_mode = rx_mode_stdout;
     // rx_mode = rx_mode_websocket;
     // rx_mode = rx_mode_udp;
-    rx_mode = rx_mode_pass;
+    m_rxmode = rx_mode_pass;
 
     if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
     {
