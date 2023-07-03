@@ -11,7 +11,7 @@ PAPR_WWW=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board
 CXX=$(CROSS_COMPILE)g++
 CC=$(CROSS_COMPILE)gcc
 #HOST_DIR=/home/linuxdev/prog/pluto/firm033/pluto_radar/plutosdr-fw/buildroot/output/host
-FLAGS = -fpermissive -Wall -Wno-write-strings -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -liio -g -mfpu=neon --sysroot=$(SYSROOT) -mfloat-abi=hard
+FLAGS = -O2 -fpermissive -Wall -Wno-write-strings -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-pointer-arith -Wno-format-zero-length -Wno-sign-compare -liio -mfpu=neon --sysroot=$(SYSROOT) -mfloat-abi=hard
 
 INC=-I./include_gse/gse
 VER=$(shell git describe --tags)

@@ -72,7 +72,7 @@ bool publish(char *mqttkey, float value)
 
 bool publish(char *mqttkey, char *svalue)
 {
-    char pubkey[255];
+    char pubkey[512];
     sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
     // fprintf(stderr,"pub %s%s\n",sDtRoot,mqttkey);
     mosquitto_publish(m_mosq, NULL, pubkey, strlen(svalue), svalue, 2, false);
@@ -863,7 +863,7 @@ enum defidx
 bool publishcmd()
 {
     char svalue[2500];
-    sprintf(svalue, "");
+    sprintf(svalue,"");
     for (int i = 0; strcmp(strcmd[i], "") != 0; i++)
     {
         strcat(svalue, strcmd[i]);

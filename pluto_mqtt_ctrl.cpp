@@ -80,7 +80,7 @@ void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_messag
     
     //fprintf(stderr,"%x %s %s\n",mosq,key,svalue);
 
-    char ValidCommand[255];
+    char ValidCommand[512];
     sprintf(ValidCommand,"cmd/pluto/%s/",sSerial);
 
    

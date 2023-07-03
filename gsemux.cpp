@@ -338,9 +338,9 @@ void *rx_bbframe_thread(void *arg)
     uint8_t label[6];
     uint16_t protocol;
     uint16_t gse_length;
-    unsigned int local_pdu;
+    unsigned int local_pdu=0;
     static unsigned char BBframe[58192 / 8];
-    int ret;
+    int ret=0;
 
     while (true)
     {
@@ -520,7 +520,7 @@ void *rx_tun_thread(void *arg)
     gse_encap_init(4, FIFO_SIZE, &encap);
 
     // build_crc8_table();
-    gse_status_t ret = 0;
+    gse_status_t ret = GSE_STATUS_OK;
     size_t tempcoderate = 0;
     while (true)
     {
@@ -720,6 +720,7 @@ void *rx_tun_thread(void *arg)
             */
         }
     }
+    return NULL;
 }
 
 void setgsemodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilots)

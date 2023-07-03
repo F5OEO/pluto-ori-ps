@@ -52,9 +52,9 @@ void writeiiohex(const char *sPath, size_t Address, size_t xValue)
     fclose(fdwrite);
 }
 
-static int fdregister=NULL;
-    static unsigned page_addr, page_offset;
-	static void *ptr=NULL;
+static int fdregister=0;
+static unsigned page_addr, page_offset;
+static void *ptr=NULL;
 static unsigned page_size;
 
 void InitDevMem(size_t Address)

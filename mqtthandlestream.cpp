@@ -84,7 +84,7 @@ int PipeSize = 0;
 size_t burstsizerx = 0;
 size_t average = 1;
 int m_format = 0;
-int fftsize = 2048;
+size_t fftsize = 2048;
 size_t BufferLenrx = 0;
 
 // TX Variable
@@ -209,7 +209,7 @@ enum
 unsigned int BBFrameLenLut[] = {3072, 5232, 6312, 7032, 9552, 10632, 11712, 12432, 13152, 14232, 0,
                                 16008, 21408, 25728, 32208, 38688, 43040, 48408, 51648, 53840, 57472, 58192};
 
-const char TabFec[][255] = {"1/4", "1/3", "2/5", "1/2", "3/5", "2/3", "3/4", "4/5", "5/6", "8/9", "9/10"};
+char TabFec[][255] = {"1/4", "1/3", "2/5", "1/2", "3/5", "2/3", "3/4", "4/5", "5/6", "8/9", "9/10"};
 
 #define MAX_QUEUE_ITEM 20
 typedef struct
@@ -292,16 +292,16 @@ void SetDVBS2Constellation()
     int16_t magqspk = 23170;
     imap = magqspk;
     qmap = magqspk;
-    WriteRegister(DVBS2Register + 0x110 + 0, (imap << 16) | qmap & 0xFFFF);
+    WriteRegister(DVBS2Register + 0x110 + 0, (imap << 16) | (qmap & 0xFFFF));
     imap = magqspk;
     qmap = -magqspk;
-    WriteRegister(DVBS2Register + 0x110 + 4, (imap << 16) | qmap & 0xFFFF);
+    WriteRegister(DVBS2Register + 0x110 + 4, (imap << 16) | (qmap & 0xFFFF));
     imap = -magqspk;
     qmap = magqspk;
-    WriteRegister(DVBS2Register + 0x110 + 8, (imap << 16) | qmap & 0xFFFF);
+    WriteRegister(DVBS2Register + 0x110 + 8, (imap << 16) | (qmap & 0xFFFF));
     imap = -magqspk;
     qmap = -magqspk;
-    WriteRegister(DVBS2Register + 0x110 + 12, (imap << 16) | qmap & 0xFFFF);
+    WriteRegister(DVBS2Register + 0x110 + 12, (imap << 16) | (qmap & 0xFFFF));
 
     for (size_t i = 0; i < 12; i++)
     {
@@ -994,7 +994,7 @@ typedef struct
 
 unsigned char getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate, uint Pilots)
 {
-    unsigned char NewModCode;
+    unsigned char NewModCode=0;
 
     if (CodeRate > 10)
         CodeRate = 10;
@@ -1307,7 +1307,7 @@ void *tx_buffer_thread(void *arg)
     if (!GetInterfaceip("eth0", ip)) // Choose first eth0
     {
         GetInterfaceip("usb0", ip);
-        char scommand[255];
+        char scommand[512];
         sprintf(scommand, "ip route add default via %s", ip);
         system(scommand);
     }
@@ -1375,7 +1375,7 @@ void *tx_buffer_thread(void *arg)
                     for (size_t i = 0; i < BufferLentx; i++)
                     {
                         Tone[i * 2] = 0x7FFF;
-                        Tone[i * 2 + 1] = -0x7FF00;
+                        Tone[i * 2 + 1] = 0;
                     }
                 }
                 // fprintf(stderr,"Tone  %d\n",BufferLentx);
@@ -1397,7 +1397,7 @@ bool publish(char *mqttkey, float value, bool isstatus = true)
 {
     char svalue[255];
     sprintf(svalue, "%.0f", value);
-    char pubkey[255];
+    char pubkey[512];
     if (isstatus)
         sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
     else
@@ -1409,7 +1409,7 @@ bool publish(char *mqttkey, float value, bool isstatus = true)
 
 bool publish(char *mqttkey, char *svalue, bool isstatus = true)
 {
-    char pubkey[255];
+    char pubkey[512];
     if (isstatus)
         sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
     else
@@ -1561,15 +1561,16 @@ void SaveToFlash(char *SaveFile) // Not working : Fixme !
 
 void LoadFromFlash(char *LoadFile) // Not working : Fixme !
 {
-    FILE *fdread = NULL;
+    /*FILE *fdread = NULL;
     char CompletPath[255];
     strcpy(CompletPath, "/mnt/jffs2/configs/");
     strcat(CompletPath, LoadFile);
     strcat(CompletPath, "/stream");
     fdread = fopen(LoadFile, "r");
-    if (fread != 0)
+    if (fread != NULL)
     {
     }
+    */
 }
 
 bool HandleCommand(char *key, char *svalue)

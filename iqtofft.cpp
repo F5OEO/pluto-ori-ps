@@ -408,7 +408,7 @@ void init_fft(uint16_t fft_size, uint16_t average)
     if (ne10_init() != NE10_OK)
     {
         fprintf(stderr, "Failed to initialise Ne10.\n");
-        return 1;
+        return ;
     }
     if (ne10_HasNEON() == NE10_OK)
     {
