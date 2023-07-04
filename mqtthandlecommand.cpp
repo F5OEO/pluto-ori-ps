@@ -676,6 +676,7 @@ bool ComputeTxSRDVBS2(char *svalue)
         return true; // This is a request status
     }
 #define FPGA_INTERPOL (8.0)
+#define FPGA_DVBS2 4
     float MinDAC = 25e6 / 12;
     float MaxDAC = 61.4e6;
     float fpgainterpol = FPGA_INTERPOL; // FPGA INTERPOL
@@ -778,7 +779,7 @@ bool ComputeTxSRDVBS2(char *svalue)
     if (fpgainterpol > 1.0)
     {
         sprintf(sSR, "%.0f", DACSR / 8 / ad9363interpol);
-        fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
+        //fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
         SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
         SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
@@ -790,14 +791,33 @@ bool ComputeTxSRDVBS2(char *svalue)
         SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
-    // Automatic Analog LPF bandwidth
-    if (RequestSR > 200e3)
+    // Automatic Analog LPF bandwidth TX
+    if (RequestSR/FPGA_DVBS2 > 200e3)
     {
-        sprintf(sSR, "%.0f", RequestSR);
+        sprintf(sSR, "%.0f", RequestSR/FPGA_DVBS2);
         SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", sSR);
+       
     }
     else
+    {
+        
         SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", "200000"); // Mini bandwidth
+       
+    }    
+
+    // Automatic Analog LPF bandwidth RX
+    if (RequestSR*fpgainterpol> 200e3)
+    {
+        sprintf(sSR, "%.0f",RequestSR*fpgainterpol);
+        
+        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", sSR); //Set it also to rx
+    }
+    else
+    {
+        
+        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth","200000");
+    }
+
     m_finaltxsr = RequestSR;
     // Unmute if we are not muted before
     if (atoi(sMute) == 0)
