@@ -679,6 +679,11 @@ ssize_t direct_rx_samples(short **RxBuffer)
 {
     ssize_t nsamples_rx = 0;
     pthread_mutex_lock(&bufpluto_mutexrx);
+    if(m_rxbuf==NULL)
+    {
+        pthread_mutex_unlock(&bufpluto_mutexrx);
+        return 0;
+    } 
     if (burstsizerx == 0) // Count only if no burstsizerx as in burtsmode we knwow that we are missing frames
     {
         // uint64_t T0 = _timestamp_ns();
@@ -752,7 +757,7 @@ void SetRxMode(int Mode)
     case rx_mode_websocket:
     {
        InitRxChannel(fftsize * 30, 2);
-       init_fft(fftsize, 10); 
+       
        
     }
     break;
@@ -775,6 +780,7 @@ void *rx_buffer_thread(void *arg)
     udp_set_ip("230.0.0.1:10000", m_iface);
     remove("/dev/rx1");
     mkfifo("/dev/rx1", 0666);
+    init_fft(fftsize, 10); 
     // fdout = fopen("/dev/rx1", "wb");
 
     // Fixme : CHange it in setrxmode
@@ -847,8 +853,8 @@ void *rx_buffer_thread(void *arg)
             case rx_mode_websocket:
             {
                 RxSize = direct_rx_samples(&RxBuffer);
-
-                iqtofft(RxBuffer, RxSize);
+                if(RxSize!=0)
+                    iqtofft(RxBuffer, RxSize);
             }
             break;
             case rx_mode_pass:
