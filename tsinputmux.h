@@ -15,4 +15,6 @@ extern int m_tssource;
 extern char m_mcast_ts[255];
 extern char m_mcast_iface[255];
 extern char m_ts_filename[255];
+
+extern void updatesdt(char *custom);
 #endif

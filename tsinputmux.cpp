@@ -340,13 +340,13 @@ void addneonts(uint8_t *tspacket, size_t length)
         }
         if (cur_packet[2] == 0x11) // replace sdt
         {
-            bbframeptr = /*(unsigned char *)*/ dvbs2neon_packet(0, (uint32)(customsdt), 0);
+            bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customsdt), 0);
             update_cont_counter(customsdt);
         }
         else
         {
 
-            bbframeptr = /*(unsigned char *)*/ dvbs2neon_packet(0, (uint32)(cur_packet), 0);
+            bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(cur_packet), 0);
         }
         cur_packet += 188;
         if (bbframeptr != NULL)
@@ -784,13 +784,8 @@ void setpaddingts()
     pthread_mutex_unlock(&buffer_mutexts);
 }
 
-#ifndef COMIT_FW
-#define COMIT_FW "OUT_OF_TREE"
-#endif
-static pthread_t p_rxts;
-void init_tsmux(char *mcast_ts, char *mcast_iface)
+void updatesdt(char *custom)
 {
-
     FILE *cmd = popen("fw_printenv -n call", "r");
     char result[255] = {0x0};
     // fgets(result, sizeof(result), cmd);
@@ -798,11 +793,32 @@ void init_tsmux(char *mcast_ts, char *mcast_iface)
     if (strcmp(result, "") == 0)
         strcpy(result, "nocall");
     pclose(cmd);
+    char sdt[512] = {0x0};
 
+    if(custom)
+    {
+        sprintf(sdt,"%s%s",custom,result);
+    }
+    else
+    {
+        sprintf(sdt,"%s",result);
+    }
     char provider[255] = {0x0};
     sprintf(provider, "PlutoDVB2-%s(F5OEO)", COMIT_FW);
     // fprintf(stderr,provider);
-    customsdt = sdt_fmt(1, 1, 1, provider, result);
+    customsdt = sdt_fmt(1, 1, 1, provider, sdt);
+
+}
+
+
+#ifndef COMIT_FW
+#define COMIT_FW "OUT_OF_TREE"
+#endif
+static pthread_t p_rxts;
+void init_tsmux(char *mcast_ts, char *mcast_iface)
+{
+
+    updatesdt("");
     int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
     int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, DATAMODE_TS);
     fmt.fec = 0;

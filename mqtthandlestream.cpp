@@ -1470,7 +1470,7 @@ bool SendCommand(char *skey, char *svalue)
 
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst","rx/stream/mode",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
-                      "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable",
+                      "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable","tx/dvbs2/sdt"
                       "tx/dvbs2/fecmode", "tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain", ""};
 enum defidx
 {
@@ -1489,6 +1489,7 @@ enum defidx
     cmd_txdvbs2pilots,
     cmd_txdvbs2sr,
     cmd_txdvbs2gainvariable,
+    cmd_txdvbs2sdt,
     cmd_txdvbs2fecmode,
     cmd_txdvbs2rxbbframe,
     cmd_txdvbs2tsourcemode,
@@ -1947,7 +1948,18 @@ bool HandleCommand(char *key, char *svalue)
 
         break;
     }
+    case  cmd_txdvbs2sdt:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+            
+            break;
+        }
+        updatesdt(svalue);
+        break;
+    }
 
+   
     case cmd_txgain:
     {
         if (strcmp(svalue, "?") == 0)
