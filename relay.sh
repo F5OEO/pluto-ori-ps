@@ -16,7 +16,7 @@ waitlock()
 
     echo "lock with mer $mer"
     $(mosquitto_pub -t $cmd_root/tx/mute -m 0)
-    $(mosquitto_pub -t $cmd_root/tx/dvbs2/sdt -m "$station via")
+    $(mosquitto_pub -t $cmd_root/tx/dvbs2/sdt -m $station"-via-")
     modulation=$(mosquitto_sub -t $dt_longmynd/modulation -C 1)
     done
     echo unlock
@@ -25,16 +25,18 @@ waitlock()
 
 scan()
 {
-    for sr in 125 250 333 500
+    for sr in 125 250 333 500 1000
     do
         $(mosquitto_pub -t cmd/longmynd/sr -m $sr)
         $(mosquitto_pub -t $dtrelay/status -m "scan $sr")
-        echo  ""$sr"000"
+        srfull=""$sr"000"
+	echo $srfull
+ $(mosquitto_pub -t $cmd_root/tx/dvbs2/sr -m $srfull)
         sleep 3
         modulation=$(mosquitto_sub -t $dt_longmynd/modulation -C 1)
         if [ "$modulation" != "none" ] ; then
             
-            $(mosquitto_pub -t $cmd_root/dvbs2/sr -m ""$sr"000")
+            $(mosquitto_pub -t $cmd_root/tx/dvbs2/sr -m $srfull)
             waitlock
         fi
     done
@@ -55,6 +57,7 @@ inputfrequency()
 
 exit_script() {
     trap - SIGINT SIGTERM # clear the trap
+	$(mosquitto_pub -t $cmd_root/tx/mute -m 1)
     kill -- -$$ # Sends SIGTERM to child/sub processes
 }
 
