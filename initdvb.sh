@@ -32,7 +32,7 @@ $(mosquitto_pub -t $cmd_root/tx/stream/mode -m dvbs2-ts)
 #$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcefile -m /root/remote/pluto_dvb/bunny450.ts)
 #$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcefile -m /root/remote/pluto_dvb/dh1rk.ts)
 #pattern
-$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcemode -m 2)
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/tssourcemode -m 2)
 
 
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/fec -m 2/3)
@@ -48,7 +48,8 @@ $(mosquitto_pub -t $cmd_root/rx/frequency -m 2404e6)
 $(mosquitto_pub -t $cmd_root/rx/gain -m 45.0)
 
 #$(mosquitto_pub -t $cmd_root/rx/stream/mode -m pass)
-$(mosquitto_pub -t $cmd_root/rx/stream/mode -m webfft)
+#To see waterfall on the web interface
+#$(mosquitto_pub -t $cmd_root/rx/stream/mode -m webfft)
 
 
 # ****************************
@@ -65,6 +66,10 @@ $(mosquitto_pub -t cmd/longmynd/tsip -m 230.0.0.2)
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/rxbbframeip -m $Mcast:1234)
 $(mosquitto_pub -t $cmd_root/ip/tunadress -m "$tunip")
 
+# RELAY MODE : COMMAND longmynd and ptt
+
+#$(mosquitto_pub -t $cmd_root/relay/infrequency -m 74725)
+#$(mosquitto_pub -t $cmd_root/relay/fecmode -m follow)
 
 #ifconfig gse0 $tunip
 #route add -net 44.0.0.0/24 gw $tunip

@@ -803,6 +803,8 @@ void updatesdt(char *custom)
     {
         sprintf(sdt,"%s",result);
     }
+
+    //fprintf(stderr,"SDT %s\n",sdt);
     char provider[255] = {0x0};
     sprintf(provider, "PlutoDVB2-%s(F5OEO)", COMIT_FW);
     // fprintf(stderr,provider);
