@@ -226,6 +226,7 @@ enum
 };
 
 int m_Fecmode = fec_fix;
+int m_FecRange = 11;
 
 queue<buffer_t *> m_bbframe_queue;
 
@@ -1471,7 +1472,7 @@ bool SendCommand(char *skey, char *svalue)
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst","rx/stream/mode",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" /*,"rx/stream/iqtype","rx/stream/udpaddress","rx/stream/udpport"*/,
                       "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable","tx/dvbs2/sdt",
-                      "tx/dvbs2/fecmode", "tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain", ""};
+                      "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain", ""};
 enum defidx
 {
     listcmd,
@@ -1491,6 +1492,7 @@ enum defidx
     cmd_txdvbs2gainvariable,
     cmd_txdvbs2sdt,
     cmd_txdvbs2fecmode,
+    cmd_txdvbs2fecrange,
     cmd_txdvbs2rxbbframe,
     cmd_txdvbs2tsourcemode,
     cmd_txdvbs2tsourceip,
@@ -1997,6 +1999,24 @@ bool HandleCommand(char *key, char *svalue)
         else
             publish("tx/dvbs2/fecmode", "bad");
 
+        break;
+    }
+
+    case cmd_txdvbs2fecrange:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+           
+            publish("tx/dvbs2/fecrange", (float)m_FecRange);
+           
+            break;
+        }
+        int fecrange=atoi(svalue);
+        if((fecrange>=0)&&(fecrange<=11))
+        {
+            m_FecRange=fecrange;
+            publish("tx/dvbs2/fecrange", (float)m_FecRange);
+        }    
         break;
     }
 

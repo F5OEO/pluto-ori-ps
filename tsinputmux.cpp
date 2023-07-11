@@ -386,6 +386,10 @@ void addneonts(uint8_t *tspacket, size_t length)
             {
                 tempmodecode = fmt;
                 int fecoffset = (m_bbframe_queue.size() / 2);
+                if(fecoffset>m_FecRange)
+                {
+                    fecoffset=m_FecRange;
+                }
 
                 if (fecoffset + tempmodecode.fec > 10)
                     tempmodecode.fec = 10;
