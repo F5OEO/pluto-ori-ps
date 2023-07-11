@@ -44,6 +44,7 @@ extern queue<buffer_t *> m_bbframe_queue;
 extern pthread_mutex_t buffer_mutextx;
 extern int m_txmode;
 extern uint32_t m_efficiency;
+extern int m_FecRange;
 
 struct bbheader
 {
