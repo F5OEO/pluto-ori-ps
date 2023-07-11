@@ -41,6 +41,10 @@ $(mosquitto_pub -t $cmd_root/tx/dvbs2/pilots -m 1)
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/frame -m short)
 #$(mosquitto_pub -t $cmd_root/tx/dvbs2/frame -m long)
 $(mosquitto_pub -t $cmd_root/tx/dvbs2/fecmode -m variable)
+#digital gain, max 3db
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/digitalgain -m 2.0)
+
+#$(mosquitto_pub -t $cmd_root/tx/dvbs2/fecrange -m 5)
 #$(mosquitto_pub -t $cmd_root/tx/dvbs2/gainvariable -m 1)
 
 

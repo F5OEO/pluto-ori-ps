@@ -134,6 +134,7 @@ size_t m_latency = 20000; // Latency at 80ms by default
 size_t Underflow = 0;
 size_t m_SR = 3000000;
 float m_maxgain = -100.0; // Impossible gain, means not AGC
+float m_digitalgain=0.0;
 
 int m_sock;
 struct sockaddr_in m_client;
@@ -290,7 +291,8 @@ void SetDVBS2Constellation()
     size_t Reg;
     // int16_t magqspk=23170;
     // int16_t magqspk=32000;
-    int16_t magqspk = 23170;
+    int16_t magqspk = 23170*exp10f(m_digitalgain/20.0);
+
     imap = magqspk;
     qmap = magqspk;
     WriteRegister(DVBS2Register + 0x110 + 0, (imap << 16) | (qmap & 0xFFFF));
@@ -1472,7 +1474,7 @@ bool SendCommand(char *skey, char *svalue)
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst","rx/stream/mode",
                       "rx/stream/average", "tx/stream/run", "tx/stream/mode" ,
                       "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable","tx/dvbs2/sdt",
-                      "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain", ""};
+                      "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain","tx/dvbs2/digitalgain", ""};
 enum defidx
 {
     listcmd,
@@ -1497,7 +1499,8 @@ enum defidx
     cmd_txdvbs2tsourcemode,
     cmd_txdvbs2tsourceip,
     cmd_txdvbs2tsourcefile,
-    cmd_txgain
+    cmd_txgain,
+    cmd_txdigitalgain
 
 };
 
@@ -1973,6 +1976,22 @@ bool HandleCommand(char *key, char *svalue)
         // Get the gain as the max for a variable gain
         m_maxgain= atof(svalue);
         
+        break;
+    }
+
+     case cmd_txdigitalgain:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+            publish("tx/dvbs2/digitalgain", m_digitalgain);
+            break;
+        }
+        if(m_digitalgain<=3.0)
+        {
+            m_digitalgain= atof(svalue);
+            SetDVBS2Constellation(); // Works only in qpsk
+        }
+        publish("tx/dvbs2/digitalgain", m_digitalgain);
         break;
     }
 
