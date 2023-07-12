@@ -82,7 +82,7 @@ size_t udp_receive(u_int16_t sock, unsigned char *b, unsigned int maxlen);
 extern int m_Fecmode;
 extern int m_txmode;
 extern unsigned char getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate, uint Pilots);
-
+extern int m_FecRange;
 enum
 {
     fec_fix,
@@ -697,8 +697,13 @@ void *rx_tun_thread(void *arg)
             // fprintf(stderr, "BBframe efficiency %d \n", ((framebytes - avail) * 100) / framebytes);
             if (m_Fecmode == fec_variable)
             {
-
+                 
+                    
                 tempcoderate = (m_bbframe_queue.size() / 2);
+                if(tempcoderate>m_FecRange)
+                {
+                    tempcoderate=m_FecRange;
+                }
                 if (m_gsecoderate + tempcoderate > 9)
                     tempcoderate = 9 - m_gsecoderate;
 
