@@ -1234,9 +1234,9 @@ void SetTxMode(int Mode)
     case tx_iq:
     case tx_test:
     {
-        int LatencyMicro = 20000; // 20 ms buffer
+        int LatencyMicro = 200000; // 200 ms buffer
         BufferLentx = LatencyMicro * (m_SRtx / 1e6);
-        InitTxChannel(BufferLentx, 2);
+        InitTxChannel(BufferLentx, 4);
         SetFPGAMode(false);
     }
     break;
@@ -2150,10 +2150,15 @@ bool HandleStatus(char *key, char *svalue)
             BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
                                                  // Should be calculated from mm_srtx
             int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;
-            pthread_mutex_lock(&bufpluto_mutextx);
-            InitTxChannel(BufferLentx, nbBuffer >= 2 ? nbBuffer : 2); // FIXME
-            pthread_mutex_unlock(&bufpluto_mutextx);
-            setgsesr(m_SRtx);
+            if((m_txmode==tx_dvbs2_ts)||(m_txmode==tx_dvbs2_gse))
+            {
+                pthread_mutex_lock(&bufpluto_mutextx);
+            
+                InitTxChannel(BufferLentx, nbBuffer >= 2 ? nbBuffer : 2); // FIXME
+                pthread_mutex_unlock(&bufpluto_mutextx);
+                setgsesr(m_SRtx);
+            }    
+            
         }
     }
     return true;
