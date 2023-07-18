@@ -538,6 +538,7 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     }
     if (len == 0) // We are in passthrough, don't get the stream because it is used externally
     {
+        int ret = iio_device_set_kernel_buffers_count(m_tx, 8); // SHould be called BEFORE create_buffer (else not setting)
         return;
     }
 
@@ -1841,7 +1842,7 @@ bool HandleCommand(char *key, char *svalue)
         if ((strcmp("9/10", svalue) == 0) || (strcmp("910", svalue) == 0))
             m_CodeRate = C9_10;
 
-        publish("tx/dvbs2/fec", m_CodeRate);
+        //publish("tx/dvbs2/fec", m_CodeRate);
         break;
     }
     case cmd_txdvbs2constellation:
