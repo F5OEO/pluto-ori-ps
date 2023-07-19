@@ -949,9 +949,9 @@ ssize_t write_from_buffer(short *Buffer, int len)
     return sent;
 }
 
-unsigned char m_ModCode = C2_3 + longframe;
+unsigned char m_ModCode = C1_4 + longframe;
 unsigned int m_BBFrameLenBit = 0;
-unsigned char m_CodeRate = 0xFF; // OxFF means not initialized
+unsigned char m_CodeRate = C1_4; // OxFF means not initialized
 unsigned char m_CodeConstel = 0; // QPSK
 unsigned char m_CodeFrame = longframe;
 unsigned char m_Pilots = 0;
@@ -1321,10 +1321,10 @@ void *tx_buffer_thread(void *arg)
         sprintf(scommand, "ip route add default via %s", ip);
         system(scommand);
     }
-    // init_tsmux("230.10.0.1:1234", ip);
+    
     init_tsmux("230.10.0.1:1234", ip);
     init_gsemux("230.0.0.2:1234", ip, "44.0.0.2", 200000);
-    // init_gsemux("230.0.0.3:1234", ip, "44.0.0.2", 20000); // Yves
+    
     while (true)
     {
 
@@ -1339,14 +1339,7 @@ void *tx_buffer_thread(void *arg)
             {
                 if (m_CodeRate == 0xFF)
                     break;
-                /*
-                    pthread_mutex_lock(&bufpluto_mutextx);
-                   InitTxChannel(BufferLentx,2);
-                    pthread_mutex_unlock(&bufpluto_mutextx);
-
-                    usleep(500000);
-                    continue;
-                     */
+                
                 SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate, m_Pilots);
                 // fprintf(stderr,"Queue %d\n",m_bbframe_queue.size());
                 if (!m_bbframe_queue.empty())
@@ -1361,7 +1354,7 @@ void *tx_buffer_thread(void *arg)
                         setpaddingts();
                     if (m_txmode == tx_dvbs2_gse)
                         setpaddinggse();
-                    // setpaddingts();
+                
                 }
             };
             break;
