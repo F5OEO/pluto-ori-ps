@@ -484,7 +484,7 @@ void setpaddinggse()
     static uint8_t BBFrameNull[MAX_BBFRAME];
 
     struct bbheader *header = (struct bbheader *)BBFrameNull;
-    header->matype1 = 0x72; // TS 0.35roff
+    header->matype1 = 0x72; // TS 0.20roff
 
     header->matype2 = 0;                       // Input Stream Identifier
     header->upl = htons(0 * 8);                // User Packet Length 188
@@ -498,8 +498,13 @@ void setpaddinggse()
     // uint16_t framebytes = BBFrameLenLut[(m_gseframetype == 0 ? 11 : 0) + m_gsecoderate] / 8;
     // m_gsemodcod = getdvbs2modcod(m_gseframetype, m_gseconstellation, m_gsecoderate, m_gsepilots);
 
-    uint16_t framebytes = BBFrameLenLut[0] / 8; // ShortFrame 1/4
-    uint8_t gsemodcod = getdvbs2modcod(1 /*short*/, m_gseconstellation, 0, m_gsepilots);
+    //uint16_t framebytes = BBFrameLenLut[0] / 8; // ShortFrame 1/4
+    //uint8_t gsemodcod = getdvbs2modcod(1 /*short*/, m_gseconstellation, 0, m_gsepilots);
+
+    uint16_t framebytes = BBFrameLenLut[((m_gseframetype == 0 ? 11 : 0) + m_gsecoderate ) % 22] / 8;
+    uint8_t gsemodcod = getdvbs2modcod(m_gseframetype, m_gseconstellation, (m_gsecoderate ) % 11, m_gsepilots);
+
+
     //fprintf(stderr, "gse padding\n");
     BBFrameNull[10] = 0; // gse padding
     m_MaxBBFrameByte += framebytes;
