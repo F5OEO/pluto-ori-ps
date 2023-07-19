@@ -527,7 +527,7 @@ void *rx_tun_thread(void *arg)
         // int len = read_from_tun(tun, ippacket);
         if (m_txmode != tx_dvbs2_gse)
         {
-            usleep(1000);
+            usleep(10000);
             continue;
         }
         gse_vfrag_t *vfrag_pdu = NULL;
