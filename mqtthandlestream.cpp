@@ -504,13 +504,13 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
        fprintf(stderr, "Rx Stream with %u buffers of %d samples\n", nbBuffer, len);
 }
 extern bool SendCommand(char *skey, char *svalue);
-void InitTxChannel(size_t len, unsigned int nbBuffer)
+bool InitTxChannel(size_t len, unsigned int nbBuffer)
 {
     if (m_ctx == NULL)
         m_ctx = iio_create_local_context();
     if (m_ctx == NULL)
         fprintf(stderr, "Init context fail\n");
-    iio_context_set_timeout(m_ctx, 0);
+    iio_context_set_timeout(m_ctx, 200);
 
     get_ad9361_stream_dev(m_ctx, TX, &m_tx);
     // fprintf(stderr,"* Initializing AD9361 IIO streaming channels\n");
@@ -539,7 +539,7 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     if (len == 0) // We are in passthrough, don't get the stream because it is used externally
     {
         int ret = iio_device_set_kernel_buffers_count(m_tx, 8); // SHould be called BEFORE create_buffer (else not setting)
-        return;
+        return true;
     }
 
     len = ((len / 8) + 1) * 8;
@@ -559,21 +559,13 @@ void InitTxChannel(size_t len, unsigned int nbBuffer)
     {
         iio_strerror(errno, msgerror, sizeof(msgerror));
         fprintf(stderr, "Could not allocate iio mem tx %s\n", msgerror);
-        sleep(10000);
+        return false;
         // exit(1);
     }
 
     iio_buffer_set_blocking_mode(m_txbuf, true);
     fprintf(stderr, "Tx Stream with %u buffers of %d samples\n", nbBuffer, len);
-    // pthread_mutex_unlock(&bufpluto_mutextx);
-    /*
-    int ret = iio_device_reg_write(m_tx, 0x80000088, 0x4);
-    if (ret)
-    {
-        fprintf(stderr, "Failed to clearn Tx DMA status register: %s\n",
-                strerror(-ret));
-    }
-    */
+    return true;
 }
 
 void InitRxChannel(size_t LatencyMicro)
@@ -1154,7 +1146,10 @@ ssize_t write_bbframe()
             fprintf(stderr, "Too much gain offset %f %f\n", offsetgain, offsetgain + m_maxgain);
         }
     }
-
+    if(iio_buffer_get_poll_fd(m_txbuf)<=0) 
+    {
+        fprintf(stderr,"Buffer issue\n");
+    }
     sent = iio_buffer_push_partial(m_txbuf, (len + 2 + IdxStart + 1) / 4);
     pthread_mutex_unlock(&bufpluto_mutextx);
     // AGC TX Gain
@@ -1222,13 +1217,14 @@ bool GetInterfaceip(char *if_name, char *ip)
 
 void SetTxMode(int Mode)
 {
+     fprintf(stderr, "Try to Change txmode %d\n", Mode);
     pthread_mutex_lock(&bufpluto_mutextx);
-
+    bool inittxok=false;
     switch (Mode)
     {
     case tx_passtrough:
     {
-        InitTxChannel(0, 0);
+        inittxok=InitTxChannel(0, 0);
         SetFPGAMode(false);
     }
     break;
@@ -1237,7 +1233,7 @@ void SetTxMode(int Mode)
     {
         int LatencyMicro = 200000; // 200 ms buffer
         BufferLentx = LatencyMicro * (m_SRtx / 1e6);
-        InitTxChannel(BufferLentx, 4);
+        inittxok=InitTxChannel(BufferLentx, 4);
         SetFPGAMode(false);
     }
     break;
@@ -1248,7 +1244,7 @@ void SetTxMode(int Mode)
         // Should be calculated from mm_srtx
         int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;
 
-        InitTxChannel(BufferLentx, nbBuffer >= 2 ? nbBuffer : 2);
+        inittxok=InitTxChannel(BufferLentx, nbBuffer >= 2 ? nbBuffer : 2);
         // InitTxChannel(BufferLentx,debugbuffer);
         debugbuffer *= 2;
 
@@ -1261,14 +1257,17 @@ void SetTxMode(int Mode)
     {
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
 
-        InitTxChannel(BufferLentx, 2);
+        inittxok= InitTxChannel(BufferLentx, 2);
         SetFPGAMode(true);
         ResetDVBS2();
         SetDVBS2Constellation();
     }
     break;
     }
-    m_txmode = Mode;
+    if(inittxok)
+         m_txmode = Mode;
+    else
+        m_txmode = tx_passtrough;
     fprintf(stderr, "Change txmode %d\n", m_txmode);
 
     uint32_t val = 0;
@@ -1345,7 +1344,11 @@ void *tx_buffer_thread(void *arg)
                 if (!m_bbframe_queue.empty())
                 {
 
-                    write_bbframe();
+                    if(write_bbframe()<=0)
+                    {
+                        //An issue , surely someone else is trying to get the buffer
+                        SetTxMode(tx_passtrough);
+                    };
                 }
                 else // No more data : need padding
                 {
@@ -1737,7 +1740,14 @@ bool HandleCommand(char *key, char *svalue)
     {
         if (strcmp(svalue, "?") == 0)
         {
-
+            switch(m_txmode)
+            {
+                case tx_iq : strcpy(s_txmode,"iq");break;
+                case tx_test : strcpy(s_txmode,"test");break;
+                case tx_passtrough : strcpy(s_txmode,"pass");break;
+                case tx_dvbs2_ts : strcpy(s_txmode,"dvbs2-ts");break;
+                case tx_dvbs2_gse : strcpy(s_txmode,"dvbs2-gse");break;
+            }
             publish("tx/stream/mode", s_txmode);
 
             break;
