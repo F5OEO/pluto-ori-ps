@@ -510,7 +510,7 @@ bool InitTxChannel(size_t len, unsigned int nbBuffer)
         m_ctx = iio_create_local_context();
     if (m_ctx == NULL)
         fprintf(stderr, "Init context fail\n");
-    iio_context_set_timeout(m_ctx, 200);
+    iio_context_set_timeout(m_ctx, 1000);
 
     get_ad9361_stream_dev(m_ctx, TX, &m_tx);
     // fprintf(stderr,"* Initializing AD9361 IIO streaming channels\n");
