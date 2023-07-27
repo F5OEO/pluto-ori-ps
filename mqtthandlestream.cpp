@@ -227,7 +227,7 @@ enum
 };
 
 int m_Fecmode = fec_fix;
-int m_FecRange = 11;
+int m_FecRange = 10;
 
 queue<buffer_t *> m_bbframe_queue;
 
@@ -2035,7 +2035,7 @@ bool HandleCommand(char *key, char *svalue)
             break;
         }
         int fecrange=atoi(svalue);
-        if((fecrange>=0)&&(fecrange<=11))
+        if((fecrange>=0)&&(fecrange<=10))
         {
             m_FecRange=fecrange;
             publish("tx/dvbs2/fecrange", (float)m_FecRange);
