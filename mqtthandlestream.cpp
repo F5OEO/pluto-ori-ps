@@ -1146,6 +1146,12 @@ ssize_t write_bbframe()
             fprintf(stderr, "Too much gain offset %f %f\n", offsetgain, offsetgain + m_maxgain);
         }
     }
+    else
+    {
+            char svalue[255];
+            sprintf(svalue, "%f", m_maxgain);
+            SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
+    }
     if(iio_buffer_get_poll_fd(m_txbuf)<=0) 
     {
         fprintf(stderr,"Buffer issue\n");
