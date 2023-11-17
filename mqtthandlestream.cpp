@@ -1996,9 +1996,10 @@ bool HandleCommand(char *key, char *svalue)
             publish("tx/dvbs2/digitalgain", m_digitalgain);
             break;
         }
-        if(m_digitalgain<=3.0)
+        float newdigitalgain=atof(svalue);
+        if(newdigitalgain<3.0)
         {
-            m_digitalgain= atof(svalue);
+            m_digitalgain= newdigitalgain;
             SetDVBS2Constellation(); // Works only in qpsk
         }
         publish("tx/dvbs2/digitalgain", m_digitalgain);
