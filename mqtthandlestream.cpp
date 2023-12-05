@@ -850,7 +850,10 @@ void *rx_buffer_thread(void *arg)
             {
                 RxSize = direct_rx_samples(&RxBuffer);
                 if(RxSize!=0)
-                    iqtofft(RxBuffer, RxSize);
+                {
+                    publishwebfft(iqtofft(RxBuffer, RxSize));
+                    usleep(40000);
+                }    
             }
             break;
             case rx_mode_pass:

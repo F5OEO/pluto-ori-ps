@@ -300,28 +300,25 @@ void PrepareFFT()
     }
 }
 
-void iqtofft(short *bufferiq, uint16_t RxSize)
+uint16_t * iqtofft(short *bufferiq, uint16_t RxSize)
 {
     static size_t average_iteration = 0;
-
+     
     //fprintf(stderr, "FFT %d \n",RxSize);
     if (RxSize % m_fftsize != 0)
     {
         fprintf(stderr, "Rx fft is not size aligned %d\n",RxSize);
-        return;
+        return nullptr;
     }
 
     for (size_t i = 0; i < RxSize/m_fftsize; i++)
     {
 
-        if (average_iteration == 0)
-        {
-            for (size_t k = 0; k < m_fftsize; k++)
+        for (size_t k = 0; k < m_fftsize; k++)
         {
             power[k]=0.0;
         }
-            
-        }
+               
         
        /*for (size_t k = 0; k < m_fftsize; k++)
         {
@@ -345,15 +342,13 @@ void iqtofft(short *bufferiq, uint16_t RxSize)
 
         }
 
-        if((average_iteration+1)%m_average==0)
-        {
             
             uint32_t max=0;
             static float floor=0xFFFFFF;
             for (size_t k = 0; k < m_fftsize; k++)
             {
                 
-            //if(power[k]<floor) floor=power[k]/(m_average*m_fftsize);
+            
             if(power[k]<floor) floor=power[k];
             if(power[k]>max) max=power[k];
             }
@@ -365,14 +360,25 @@ void iqtofft(short *bufferiq, uint16_t RxSize)
                 powerdb[ k]=(100.0*log10(power[k]-floor));
                 //fprintf(stderr,"%d \n",powerdb[ k]);        
             }
+
             //fprintf(stderr,"Min %d Max %d\n",floor,max);    
-            h_websocket.process(powerdb, m_fftsize);
-            usleep(20000);
-        }
-       average_iteration= (average_iteration+1)%m_average;
+            //h_websocket.process(powerdb, m_fftsize);
+            //usleep(20000);
+        
+       
 
     }
+    return powerdb;
 }
+
+
+void publishwebfft(uint16_t *powfftdb)
+{
+    if(powfftdb==nullptr) return;
+    h_websocket.process(powfftdb, m_fftsize);
+    usleep(40000);
+}
+
 
 #define WS_PORT "7681"
 #define DOCUMENT_ROOT "."
