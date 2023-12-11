@@ -792,9 +792,9 @@ bool ComputeTxSRDVBS2(char *svalue)
     }
 
     // Automatic Analog LPF bandwidth TX
-    if (RequestSR/FPGA_DVBS2 > 200e3)
+    if (RequestSR > 200e3)
     {
-        sprintf(sSR, "%.0f", RequestSR/FPGA_DVBS2);
+        sprintf(sSR, "%.0f", RequestSR*fpgainterpol);
         SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", sSR);
        
     }
@@ -806,6 +806,7 @@ bool ComputeTxSRDVBS2(char *svalue)
     }    
 
     // Automatic Analog LPF bandwidth RX
+    /*
     if (RequestSR*fpgainterpol> 200e3)
     {
         sprintf(sSR, "%.0f",RequestSR*fpgainterpol);
@@ -817,16 +818,17 @@ bool ComputeTxSRDVBS2(char *svalue)
         
         SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth","200000");
     }
-
+    */
     m_finaltxsr = RequestSR;
     // Unmute if we are not muted before
     if (atoi(sMute) == 0)
         SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "0");
+    publish("tx/fpgainterpol", (float)fpgainterpol);
+    publish("tx/ad9363interpol", (float)ad9363interpol);    
     publish("tx/finalsr", m_finaltxsr);
     publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
     publishstatus("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", "tx/sr");
-    publish("tx/fpgainterpol", (float)fpgainterpol);
-    publish("tx/ad9363interpol", (float)ad9363interpol);
+   
 
     return result;
 }
@@ -1029,6 +1031,7 @@ bool HandleCommand(char *key, char *soriginvalue)
     {
         if (strcmp(svalue, "?") != 0)
             SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_frequency", svalue);
+
         publishstatus("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_frequency", key);
         break;
     }

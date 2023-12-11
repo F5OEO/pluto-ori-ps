@@ -54,6 +54,12 @@ htonl() */
 #include <CivetServer.h>
 #include <NE10.h>
 
+//extern bool SendCommand(char *skey, char *svalue);
+extern bool publish(char *mqttkey, float value, bool isstatus = true);
+extern bool publish(char *mqttkey, char *svalue, bool isstatus = true);
+extern uint64_t WebfftRxFrequency ;
+extern uint64_t WebfftRxSpan ;
+
 using namespace std;
 
 /* DEBUG macro */
@@ -118,7 +124,6 @@ public:
     }
 };
 
-
 void extract_between_quotes(char *s, char *dest)
 {
     int in_quotes = 0;
@@ -153,7 +158,7 @@ public:
     virtual bool handleConnection(CivetServer *server,
                                   const struct mg_connection *conn)
     {
-         fprintf(stderr,"WS connected\n");
+        fprintf(stderr, "WS connected\n");
 
         return true;
     }
@@ -166,9 +171,9 @@ public:
             std::lock_guard<std::mutex> l(connectionsLock_);
             connections_.insert(conn);
         }
-        //update_web_param();
-        // process_param(span);
-        //  process_param(centrefreq);
+        // update_web_param();
+        //  process_param(span);
+        //   process_param(centrefreq);
         /*
          send(centrefreq, strlen(centrefreq),MG_WEBSOCKET_OPCODE_TEXT);
         send(span, strlen(centrefreq),MG_WEBSOCKET_OPCODE_TEXT);
@@ -216,7 +221,7 @@ public:
     void process(uint16_t *bin, int fftlen)
     {
 
-        send((char *)bin, fftlen *2, MG_WEBSOCKET_OPCODE_BINARY);
+        send((char *)bin, fftlen * 2, MG_WEBSOCKET_OPCODE_BINARY);
     }
 
     void process_param(char *param)
@@ -258,20 +263,173 @@ void jsonize_param(const char *name, float param, char *jsonresult)
     strcat(jsonresult, paramjson);
 }
 
-void update_web_param(float freqrx,float span)
+void update_web_param(float freqrx, float span)
 {
     char webmessage[255];
     strcpy(webmessage, "");
-    
-        jsonize_param("center", 745e6 /*freqrx*/, webmessage);
-        
-        jsonize_param("span", 10e6 /*span*/, webmessage);
-        
-        strcat(webmessage, "}");
-        fprintf(stderr, "Webmessage = %s\n", webmessage);
-       
+
+    jsonize_param("center", freqrx, webmessage);
+
+    jsonize_param("span", span, webmessage);
+
+    strcat(webmessage, "}");
+    fprintf(stderr, "Webmessage = %s\n", webmessage);
+
     h_websocket.process_param(webmessage);
 }
+
+// ********************** FASTLOCK FUNCTIONS **********************************
+
+void GetiioKey(char *iio_key, char *svalue)
+{
+    FILE *fdread = NULL;
+    fdread = fopen(iio_key, "r");
+    fscanf(fdread, "%s", svalue); // To avoid getting units
+    fclose(fdread);
+}
+
+bool SendiioCommand(char *skey, char *svalue)
+{
+    FILE *fdwrite = NULL;
+    fdwrite = fopen(skey, "w");
+    if (fdwrite == NULL)
+        return false;
+
+    fprintf(fdwrite, "%s", svalue);
+
+    fclose(fdwrite);
+    return true;
+}
+
+bool SendiioCommand(char *skey, int64_t value)
+{
+    char svalue[255];
+    sprintf(svalue, "%lld", value);
+    return SendiioCommand(skey, svalue);
+}
+
+char fastlock_param_rx[8][255];
+char fastlock_param_tx[8][255];
+
+char *GetFastlockParam(int fastlock_profile_no, bool tx)
+{
+
+    struct iio_channel *chn = NULL;
+    if (tx)
+    {
+
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_fastlock_store", fastlock_profile_no);
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_fastlock_save", fastlock_profile_no);
+        GetiioKey("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_fastlock_save", fastlock_param_tx[fastlock_profile_no]);
+
+        return fastlock_param_tx[fastlock_profile_no];
+    }
+    else
+    {
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_store", fastlock_profile_no);
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_save", fastlock_profile_no);
+        GetiioKey("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_save", fastlock_param_rx[fastlock_profile_no]);
+        return fastlock_param_rx[fastlock_profile_no];
+    }
+}
+
+void SetFastlockParam(char *fastlockparam, int fastlock_profile_no, bool tx)
+{
+
+    fastlockparam[0] = '0' + fastlock_profile_no; // We overwrite the profile
+                                                  // fprintf(stderr,"FastProfile %d : %s\n",fastlock_profile_no,fastlockparam);
+    if (tx)
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_fastlock_load", fastlock_profile_no);
+    else
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_load", fastlock_profile_no);
+}
+
+void SetFastlockTune(int fastlock_profile_no, bool tx)
+{
+
+    // iio_channel_attr_write_longlong(chn,"fastlock_recall",fastlock_profile_no);
+}
+
+void RecallFastlockTune(int fastlock_profile_no)
+{
+    if (fastlock_profile_no < 8)
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_recall", fastlock_profile_no);
+}
+
+size_t PrepareSpan(uint64_t CenterFrequency, uint64_t SR, uint64_t span)
+{
+    SendiioCommand("/sys/kernel/debug/iio/iio:device0/adi,rx-fastlock-pincontrol-enable", "0");
+
+   
+
+    if (SR> 200e3)
+    {
+               
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", SR); //Set it also to rx
+    }
+    else
+    {
+        
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth",200000);
+    }
+
+     SR = SR/2; // Because we drop 1/2 bin  ! 1/4 at begin and 1/4 at end
+    size_t NbSweep = span / SR;
+     char svalue[255];
+    if (span <= SR) // We need to zoom
+    {
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_frequency", CenterFrequency);
+        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_store", "0");
+       
+        sprintf(svalue,"%lld",SR);
+        WebfftRxSpan=SR;
+        publish("rx/webfft/span",svalue,true);
+        sprintf(svalue,"%lld",CenterFrequency);
+        publish("rx/webfft/frequency",svalue,true);
+       
+        //update_web_param(CenterFrequency,SR);
+    }
+    else // We need to sweep
+    {
+        if(span % SR > 0) NbSweep++;
+        WebfftRxSpan=NbSweep*SR;
+        sprintf(svalue,"%lld",NbSweep*SR);
+        publish("rx/webfft/span",svalue,true);
+        
+        sprintf(svalue,"%lld",CenterFrequency);
+        publish("rx/webfft/frequency",svalue,true);
+        //update_web_param(CenterFrequency,NbSweep*SR);
+        uint64_t sweepfreq;
+        if (NbSweep % 2 == 1)                                  // Impair
+                    sweepfreq = CenterFrequency - ((int)(NbSweep / 2)) * SR; // Fixme need to see if /2 or not
+                else
+                {
+                    sweepfreq = CenterFrequency - ((int)(NbSweep / 2)) * SR + SR / 2.0;
+                }
+        if (NbSweep > 8) // Need a slow sweep
+        {
+            for (size_t i = 0; i < 8; i++)
+            {
+                SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_frequency", CenterFrequency + i * SR);
+                SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_store", i);
+            }
+        }
+        else // It suits in 8 profiles
+        {
+            for (size_t i = 0; i < NbSweep; i++)
+            {
+                
+                SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_frequency", sweepfreq);
+                sweepfreq+=SR;
+                SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_store", i);
+            }
+        }
+    }
+    fprintf(stderr, " Prepare SR %lld NbSweep %d\n", SR, NbSweep);
+    return NbSweep;
+}
+
+// ********************** END FASTLOCK FUNCTIONS **********************************
 
 uint16_t m_fftsize = 0;
 uint16_t m_average = 1;
@@ -290,7 +448,7 @@ void PrepareFFT()
     iqsample = (ne10_fft_cpx_int16_t *)malloc(m_fftsize * sizeof(ne10_fft_cpx_int16_t));
     fftsample = (ne10_fft_cpx_int16_t *)malloc(m_fftsize * sizeof(ne10_fft_cpx_int16_t));
     power = (float *)malloc(m_fftsize * sizeof(float));
-    powerdb = (uint16_t *)malloc(m_fftsize * sizeof(uint16_t));
+    powerdb = (uint16_t *)malloc(m_fftsize * sizeof(uint16_t) * 8); // 8 because max sweep
     cfg = ne10_fft_alloc_c2c_int16(m_fftsize);
     hanning_window_const = (float *)malloc(m_fftsize * sizeof(float));
 
@@ -300,85 +458,103 @@ void PrepareFFT()
     }
 }
 
-uint16_t * iqtofft(short *bufferiq, uint16_t RxSize)
+uint16_t *iqtofft(short *bufferiq, uint16_t RxSize, int NbSweep,size_t *bin)
 {
-    static size_t average_iteration = 0;
-     
-    //fprintf(stderr, "FFT %d \n",RxSize);
+    
+
+    // fprintf(stderr, "FFT %d \n",RxSize);
     if (RxSize % m_fftsize != 0)
     {
-        fprintf(stderr, "Rx fft is not size aligned %d\n",RxSize);
+        fprintf(stderr, "Rx fft is not size aligned %d\n", RxSize);
         return nullptr;
     }
 
-    for (size_t i = 0; i < RxSize/m_fftsize; i++)
+    size_t average_iteration = RxSize / m_fftsize;
+
+     for (size_t k = 0; k < m_fftsize; k++)
+        {
+            power[k] = 0.0;
+        }
+
+    for (size_t i = 0; i < RxSize / m_fftsize; i++)
     {
 
-        for (size_t k = 0; k < m_fftsize; k++)
-        {
-            power[k]=0.0;
-        }
-               
+       
         
-       /*for (size_t k = 0; k < m_fftsize; k++)
-        {
-            bufferiq[2*k]=bufferiq[2*k]*hanning_window_const[k];
-            bufferiq[2*k+1]=bufferiq[2*k+1]*hanning_window_const[k];
-        } 
-         */  
+        for (size_t k = 0; k < m_fftsize; k++)
+         {
+             bufferiq[2*k]=bufferiq[2*k]*hanning_window_const[k];
+             bufferiq[2*k+1]=bufferiq[2*k+1]*hanning_window_const[k];
+         }
+         
+
         // Perfom FFT
         ne10_fft_c2c_1d_int16(fftsample, (ne10_fft_cpx_int16_t *)bufferiq + i * m_fftsize, cfg, 0, 0);
         for (size_t k = 0; k < m_fftsize; k++)
         {
-             //power[k]+=sqrt(fftsample[k].i*fftsample[k].i+fftsample[k].r*fftsample[k].r)/m_average;
-             if(k<m_fftsize/2)
-             {
-                power[k+m_fftsize/2]+=sqrt(fftsample[k].i*fftsample[k].i+fftsample[k].r*fftsample[k].r);
-             }
-             else
-             {
-                power[k-m_fftsize/2]+=sqrt(fftsample[k].i*fftsample[k].i+fftsample[k].r*fftsample[k].r);
-             }
-
+            // power[k]+=sqrt(fftsample[k].i*fftsample[k].i+fftsample[k].r*fftsample[k].r)/m_average;
+            if (k < m_fftsize / 2)
+            {
+                power[k + m_fftsize / 2] += sqrt(fftsample[k].i * fftsample[k].i + fftsample[k].r * fftsample[k].r);
+            }
+            else
+            {
+                power[k - m_fftsize / 2] += sqrt(fftsample[k].i * fftsample[k].i + fftsample[k].r * fftsample[k].r);
+            }
         }
 
-            
-            uint32_t max=0;
-            static float floor=0xFFFFFF;
-            for (size_t k = 0; k < m_fftsize; k++)
-            {
-                
-            
-            if(power[k]<floor) floor=power[k];
-            if(power[k]>max) max=power[k];
-            }
-
-            for (size_t k = 0; k < m_fftsize; k++)
-            {
-                
-                //Should be divided by m_fftsize and m_average for unity gain    
-                powerdb[ k]=(100.0*log10(power[k]-floor));
-                //fprintf(stderr,"%d \n",powerdb[ k]);        
-            }
-
-            //fprintf(stderr,"Min %d Max %d\n",floor,max);    
-            //h_websocket.process(powerdb, m_fftsize);
-            //usleep(20000);
-        
-       
-
     }
+
+    /*
+        uint32_t max = 0;
+        static float floor = 0xFFFFFF;
+        for (size_t k = 0; k < m_fftsize; k++)
+        {
+
+            if (power[k] < floor)
+                floor = power[k];
+            if (power[k] > max)
+                max = power[k];
+        }
+    */
+
+    
+        //for (size_t k = 0; k < m_fftsize; k++)
+        int32_t InterSweepCorrect=0;
+        for (size_t k = 0; k < m_fftsize/2; k++)
+        {
+
+            // Should be divided by m_fftsize and m_average for unity gain
+            //powerdb[k + NbSweep * m_fftsize] = (100.0 * log10(power[k] - floor)/((float)(average_iteration)));
+            //powerdb[k + NbSweep * m_fftsize] = 100.0 * log10(power[k] /*- floor*/);
+            
+            if((k==0)&&(NbSweep>0)) // Make a correction by recover 2 sweep fft's
+            {
+                InterSweepCorrect=0;
+                int average=64;
+                for(int i=0;i<average;i++)
+                {   
+                    InterSweepCorrect+= 100.0 * log10(power[-average+i+m_fftsize/4]) - powerdb[ -average+i + NbSweep * m_fftsize/2  ];
+                }
+                InterSweepCorrect=InterSweepCorrect/average;
+                
+            }
+            powerdb[k + NbSweep * m_fftsize/2] = 100.0 * log10(power[k+m_fftsize/4] /*- floor*/)-InterSweepCorrect;
+            // fprintf(stderr,"%d \n",powerdb[ k]);
+        }
+
+        *bin= m_fftsize/2;
+    
+    
     return powerdb;
 }
 
-
-void publishwebfft(uint16_t *powfftdb)
+void publishwebfft(uint16_t *powfftdb, int Totalbin)
 {
-    if(powfftdb==nullptr) return;
-    h_websocket.process(powfftdb, m_fftsize);
-    usleep(40000);
+    if (powfftdb == nullptr)
+        return;
+    h_websocket.process(powfftdb, Totalbin);
 }
-
 
 #define WS_PORT "7681"
 #define DOCUMENT_ROOT "."
@@ -395,16 +571,16 @@ void init_fft(uint16_t fft_size, uint16_t average)
     if (mg_check_feature(MG_FEATURES_WEBSOCKET) > 0)
         fprintf(stderr, "WebSocket Enable\n");
     else
-           fprintf(stderr, "ERROR : WebSocket is not enable\n");     
+        fprintf(stderr, "ERROR : WebSocket is not enable\n");
     const char *options[] = {
         "document_root", DOCUMENT_ROOT, "listening_ports", WS_PORT, 0};
-        
+
     std::vector<std::string> cpp_options;
     for (int i = 0; i < (sizeof(options) / sizeof(options[0]) - 1); i++)
     {
         cpp_options.push_back(options[i]);
     }
-    server=new CivetServer(cpp_options);
+    server = new CivetServer(cpp_options);
 
     WsStartHandler h_ws;
     server->addHandler("/ws", h_ws);
@@ -414,7 +590,7 @@ void init_fft(uint16_t fft_size, uint16_t average)
     if (ne10_init() != NE10_OK)
     {
         fprintf(stderr, "Failed to initialise Ne10.\n");
-        return ;
+        return;
     }
     if (ne10_HasNEON() == NE10_OK)
     {

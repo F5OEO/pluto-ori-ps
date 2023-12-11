@@ -96,6 +96,8 @@ int m_formattx = 0;
 
 size_t BufferLentx = 0;
 
+size_t m_sweep=0;
+
 // ************ Rx Thread *********************
 static pthread_t m_tid[1];
 static bool RunRx = true;
@@ -147,6 +149,9 @@ size_t m_s2sr = 1000000;
 uint32_t m_efficiency = 1000000;
 char mcast_rxiface[255]; // mcast ip to receive bbrame from longmynd
 
+uint64_t WebfftRxFrequency = 745000000;
+uint64_t WebfftRxSpan = 1000000;
+int fpgainterpol=8;
 enum
 {
     rx_mode_pass,
@@ -848,12 +853,38 @@ void *rx_buffer_thread(void *arg)
 
             case rx_mode_websocket:
             {
-                RxSize = direct_rx_samples(&RxBuffer);
-                if(RxSize!=0)
+                size_t bin;
+                if(m_sweep==0)
                 {
-                    publishwebfft(iqtofft(RxBuffer, RxSize));
-                    usleep(40000);
-                }    
+                    RxSize = direct_rx_samples(&RxBuffer);
+                    if(RxSize!=0)
+                    {
+                        publishwebfft(iqtofft(RxBuffer, RxSize,0,&bin),bin);
+                        usleep(40000);
+                    }
+                }
+                else
+                {
+                    uint16_t *powerdb=nullptr;
+                    for(size_t i=0;i<m_sweep;i++)
+                    {
+                        //fprintf(stderr,"Recall %d\n",i);
+                        RecallFastlockTune(i);
+                        RxSize = direct_rx_samples(&RxBuffer); //Skip old data - Fixme : number of samples should be calculated to suite fix time of buffer
+                        //usleep(1000); //Fixme no sleep here
+                        RxSize = direct_rx_samples(&RxBuffer);
+                        
+                        if(RxSize!=0)
+                        {
+                            if(i==0)
+                                powerdb= iqtofft(RxBuffer, RxSize,i,&bin);
+                            else
+                                iqtofft(RxBuffer, RxSize,i,&bin);
+                        }
+                    }
+                    //usleep(40000-m_sweep*1000);
+                    publishwebfft(powerdb,bin*m_sweep);
+                }        
             }
             break;
             case rx_mode_pass:
@@ -1477,8 +1508,8 @@ bool SendCommand(char *skey, char *svalue)
     return true;
 }
 
-char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst","rx/stream/mode",
-                      "rx/stream/average", "tx/stream/run", "tx/stream/mode" ,
+char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst","rx/stream/mode","rx/stream/average","rx/webfft/frequency","rx/webfft/span",
+                      "tx/stream/run", "tx/stream/mode" ,
                       "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable","tx/dvbs2/sdt",
                       "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain","tx/dvbs2/digitalgain", ""};
 enum defidx
@@ -1490,6 +1521,8 @@ enum defidx
     cmd_rxstreamburst,
     cmd_rxstreammode,
     cmd_rxstreamaverage,
+    cmd_rxwebfftfrequency,
+    cmd_rxwebfftspan,
     cmd_txstreamrun,
     cmd_txstreammode,
     cmd_txdvbs2fec,
@@ -1721,6 +1754,36 @@ bool HandleCommand(char *key, char *svalue)
         publish("rx/stream/average", (float)burstsizerx);
         break;
     }
+
+    case cmd_rxwebfftfrequency:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("rx/webfft/frequency", (float)WebfftRxFrequency);
+            break;
+        }
+        WebfftRxFrequency = atol(svalue);
+        fprintf(stderr,"New webfreq %lld\n",WebfftRxFrequency);
+        m_sweep=PrepareSpan(WebfftRxFrequency,m_SRtx*fpgainterpol,WebfftRxSpan);
+        //publish("rx/webfft/frequency", (float)WebfftRxFrequency);
+        break;
+    }
+
+    case cmd_rxwebfftspan:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("rx/webfft/span", (float)WebfftRxSpan);
+            break;
+        }
+        WebfftRxSpan = atol(svalue);
+        m_sweep=PrepareSpan(WebfftRxFrequency,m_SRtx*fpgainterpol,WebfftRxSpan);
+        ///publish("rx/webfft/span", (float)WebfftRxSpan);
+        break;
+    }
+
     case cmd_txstreamrun:
     {
         if (strcmp(svalue, "?") == 0)
@@ -2118,13 +2181,16 @@ bool HandleCommand(char *key, char *svalue)
 
 bool HandleStatus(char *key, char *svalue)
 {
+    
+    static uint64_t RxFrequency=1000000;
     // fprintf(stderr,"Handle status %s\n",key);
     if (strcmp(key, "rx/finalsr") == 0)
     {
         if (atol(svalue) != m_SR)
         {
             m_SR = atol(svalue);
-            fprintf(stderr, "New sr %d\n", m_SR);
+            fprintf(stderr, "New Rx sr %d\n", m_SR);
+            
             // update_web_param(,m_SR);
             /*
             if (RunRx)
@@ -2141,6 +2207,18 @@ bool HandleStatus(char *key, char *svalue)
             }*/
         }
     }
+
+    if (strcmp(key, "rx/frequency") == 0)
+    {
+        if (atol(svalue) != RxFrequency)
+        {
+            RxFrequency = atol(svalue);
+            
+            //m_sweep=PrepareSpan(RxFrequency,m_SRtx*fpgainterpol,10000000);
+            
+        }
+    }
+
     if (strcmp(key, "rx/format") == 0)
     {
         if (atoi(svalue) != m_format)
@@ -2153,6 +2231,16 @@ bool HandleStatus(char *key, char *svalue)
         }
     }
 
+    
+
+    if (strcmp(key, "tx/fpgainterpol") == 0)
+    {
+        
+            fpgainterpol = atoi(svalue);
+            
+        
+    }
+
     if (strcmp(key, "tx/finalsr") == 0)
     {
         if (atol(svalue) != m_SRtx)
@@ -2161,6 +2249,7 @@ bool HandleStatus(char *key, char *svalue)
 
             fprintf(stderr, "New sr %d\n", m_SRtx);
 
+            m_sweep=PrepareSpan(WebfftRxFrequency,m_SRtx*fpgainterpol,WebfftRxSpan);
             BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
                                                  // Should be calculated from mm_srtx
             int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;

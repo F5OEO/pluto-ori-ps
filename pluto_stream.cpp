@@ -146,8 +146,6 @@ int main(int argc, char **argv)
    
     while(want_quit!=1)
     {
-        //rx_buffer_thread(NULL);
-        // usleep(10);
         
         usleep(100000);
         
