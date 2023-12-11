@@ -12,5 +12,5 @@ param=$(mosquitto_sub -t $cmd_root/ip/tunadress -C 1)
 #tunctl -t gse
 ifconfig gse0 up
 ifconfig gse0 $param
-route add -net 44.0.0.0/24 gw $param
+#route add -net 44.0.0.0/24 gw $param
 done
