@@ -392,10 +392,11 @@ size_t PrepareSpan(uint64_t CenterFrequency, uint64_t SR, uint64_t span)
     else // We need to sweep
     {
         if(span % SR > 0) NbSweep++;
+        if(NbSweep>8) NbSweep=8;
         WebfftRxSpan=NbSweep*SR;
         sprintf(svalue,"%lld",NbSweep*SR);
         publish("rx/webfft/span",svalue,true);
-        
+
         sprintf(svalue,"%lld",CenterFrequency);
         publish("rx/webfft/frequency",svalue,true);
         //update_web_param(CenterFrequency,NbSweep*SR);
@@ -406,6 +407,7 @@ size_t PrepareSpan(uint64_t CenterFrequency, uint64_t SR, uint64_t span)
                 {
                     sweepfreq = CenterFrequency - ((int)(NbSweep / 2)) * SR + SR / 2.0;
                 }
+        /*        
         if (NbSweep > 8) // Need a slow sweep
         {
             for (size_t i = 0; i < 8; i++)
@@ -415,6 +417,7 @@ size_t PrepareSpan(uint64_t CenterFrequency, uint64_t SR, uint64_t span)
             }
         }
         else // It suits in 8 profiles
+        */
         {
             for (size_t i = 0; i < NbSweep; i++)
             {
