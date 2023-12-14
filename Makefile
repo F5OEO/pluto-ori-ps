@@ -15,6 +15,7 @@ FLAGS = -O2 -fpermissive -Wall -Wno-write-strings -Wno-unused-function -Wno-unus
 
 INC=-I./include_gse/gse
 VER=$(shell git describe --tags)
+$(shell git log --pretty=format:"%h - %ad : %s" > history.txt)
 
 all: pluto_mqtt_ctrl pluto_stream 
 
@@ -45,5 +46,6 @@ install:
 	./makepatern.sh
 	cp mire.ts $(PAPR_ORI)
 	cp www/* -r $(PAPR_WWW)
+	cp history.txt -r $(PAPR_ORI)
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse
