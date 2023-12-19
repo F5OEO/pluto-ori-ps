@@ -112,6 +112,7 @@ int crc32_add( uint8_t *b, int len )
 
 uint8_t m_sdt_seq;
 uint8_t sdt_pkt[188];
+uint8_t version=2;
 
 int f_sdts( uint8_t *b, sdt_section *p )
 {
@@ -185,16 +186,17 @@ uint8_t* sdt_fmt( int stream_id, int network_id, int service_id, char *service_p
 
     // Add the payload
     sds.transport_stream_id    = stream_id;
-    sds.version_number         = 2;
+    sds.version_number         = version;
     sds.current_next_indicator = 1;
     sds.original_network_id    = network_id;
     sds.section_number         = 0;
     sds.last_section_number    = 0;
 
+    version=(version+1)%32;
     // First section
     sds.section[0].service_id              = service_id;
-    sds.section[0].eit_schedule_flag       = 1;
-    sds.section[0].eit_present_follow_flag = 1;
+    sds.section[0].eit_schedule_flag       = 0;
+    sds.section[0].eit_present_follow_flag = 0;
     sds.section[0].running_status          = 4;
     sds.section[0].free_ca_mode            = 0;
     sds.section[0].nr_descriptors          = 1;
