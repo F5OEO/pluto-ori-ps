@@ -332,72 +332,20 @@ void addneonts(uint8_t *tspacket, size_t length)
             fprintf(stderr, "Ts input error aligned %x\n", cur_packet[0]);
             return;
         }
-        if ((m_Fecmode == fec_variable) && ((cur_packet[1] & 0x1F) == 0x1F) && (cur_packet[2] == 0xFF)) // Remove TS padding
+        if ((m_Fecmode == fec_variable) && GetPid((char*)cur_packet)==0x1FFF) // Remove TS padding
         {
             cur_packet += 188;
              
             continue;
             // Nothing to add
         }
+        ProcessCorectPCR(cur_packet,188); // Correct PCR
         if (GetPid((char*)cur_packet) == 0x11) // replace sdt
         {
             bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customsdt), 0);
             update_cont_counter(customsdt);
         }
-        /*
-        else
-        if (GetPid(cur_packet) == 256) // video
-        {
-            static unsigned long long pts,oldpts;
-            unsigned long long dts;
-            static unsigned long long pcr,oldpcr;
-             long long video_delay;
-            int PacketOffsetPTS;
-            int PacketOffsetDTS;
-            char flag=0;
-            //if(PCRAvailable(cur_packet))
-            {
-                if(PCRAvailable(cur_packet))
-                {
-                    oldpcr=pcr;
-                    pcr=GetPCRFromPacket(cur_packet);
-                }    
-                else
-                {
-                    pcr=0;    
-                }    
-                flag=GetPTSFromPacket(cur_packet,&pts, &dts, &PacketOffsetPTS, &PacketOffsetDTS);
-                if(flag==2) // PTS
-                {
-
-                    if(pcr)                   
-                        video_delay=pts-pcr;
-                    if(pcr)                   
-                        fprintf(stderr,"PCR %llu PTS = %llu PCR/PTS %lld PTS/OLD %lld\n",pcr,pts,video_delay/27000LL,(pts-(long long)oldpts)/27000LL);     
-                    else
-                        fprintf(stderr,"PTS = %llu PTS/OLD %lld\n",pts,(pts-(long long)oldpts)/27000LL);     
-                    oldpts=pts;    
-                    
-                }
-                if(flag==3) // PTS
-                {
-                    video_delay=pts-pcr;
-                    if(pcr)                   
-                        fprintf(stderr,"PCR %llu PTS %llu DTS %llu PCR/PTS %lld  PTS/OLD %lld\n",pcr,pts,dts,video_delay/27000LL,(pts-(long long)oldpts)/27000LL);
-                    else
-                        fprintf(stderr,"PTS = %llu DTS %llu PTS/OLD %lld\n",pts,dts,(pts-(long long)oldpts)/27000LL);     
-                         
-                    oldpts=pts;    
-                }
-            }
-             bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(cur_packet), 0);
-        }
-        else
-        if (GetPid(cur_packet) == 257) // audio
-        {
-            bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(cur_packet), 0);
-        }
-        */
+        
         else
         {
 
