@@ -408,19 +408,21 @@ long GetMilliOfDay()
 
 static int64_t PCRReference=0;
 static int64_t ClockTimeReference=0;
+static int64_t OldPCR=0;
 
 uint64_t GetPcrTime(uint64_t PCR)
 {
 		
 	int64_t ClockTime=GetMilliOfDay();
 	
-	if(ClockTime-ClockTimeReference>10000L) //Fixme abs time ?
+	if((OldPCR==0)||(abs(OldPCR-(int64_t)PCR)>27000LL*100LL)) // pcr period too long 100ms
 	{
 		
 		PCRReference=PCR;
 		ClockTimeReference=ClockTime;
-		//fprintf(stderr,"clktimereference = %lld pcrref %lld\n",ClockTimeReference,PCRReference);
+		fprintf(stderr,"clktimereference = %lld pcrref %lld\n",ClockTimeReference,PCRReference);
 	}
+	OldPCR=PCR;
 	//fprintf(stderr,"pcrtime %lld\n",PCR-PCRReference+ClockTimeReference*27000LL);
 	return (PCR-PCRReference+ClockTimeReference*27000LL);
 }
@@ -432,7 +434,7 @@ uint64_t GetPtsDtsTime(uint64_t pts_dts)
 
 long GetLatencyTransmission(uint64_t PCR)
 {
-	return (GetMilliOfDay()+100-PCR/27000LL); //100ms by expperiment
+	return (GetMilliOfDay()-PCR/27000LL); 
 }
 
 void ProcessCorectPCR(uint8_t *Buffer, size_t BUFF_MAX_SIZE)
@@ -542,6 +544,10 @@ for (size_t i = 0; i < BUFF_MAX_SIZE; i += 188)
 				if(abs(TxDelay)<10000L) // if more than 10s , this is not a DVB2 compliant device
 				{
 					*TransDelay=GetLatencyTransmission(pcr);
+				}
+				else
+				{
+					TransDelay=0;
 				}
                 flag = GetPTSFromPacket(cur_packet, (unsigned long long *)&pts, (unsigned long long *)&dts, &PacketOffsetPTS, &PacketOffsetDTS);
                 if (flag == 2) // PTS
