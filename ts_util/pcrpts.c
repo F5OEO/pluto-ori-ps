@@ -503,8 +503,14 @@ void ProcessCorectPCR(uint8_t *Buffer, size_t BUFF_MAX_SIZE)
                 }
                 //fprintf(stderr, "Warning :: PTS in audio APTS %llu ADTS %llu \n", pts,dts);
             }
-            if (flag == 3) // DTS
+            if (flag == 3) // PTS/DTS
             {
+				 if (PacketOffsetPTS)
+                    {
+                        set_timedts_pts(GetPtsDtsTime(pts), cur_packet+PacketOffsetPTS);
+                        //fprintf(stderr, "VPTS %llu \n", pts);
+                    }
+
                 if (PacketOffsetDTS)
                 {
                     //fprintf(stderr, "ADTS %llu \n", dts);
