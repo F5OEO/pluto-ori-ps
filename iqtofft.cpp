@@ -473,6 +473,7 @@ uint16_t *iqtofft(short *bufferiq, uint16_t RxSize, int NbSweep,size_t *bin)
     }
 
     size_t average_iteration = RxSize / m_fftsize;
+    if(average_iteration>2) average_iteration=2; //Less average to lower CPU
 
      for (size_t k = 0; k < m_fftsize; k++)
         {

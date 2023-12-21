@@ -20,7 +20,7 @@
   ===========================================================================
 */
 #define FPGA 1
-//
+//  
 
 #include <stdio.h>
 #include <stdio_ext.h>
@@ -476,6 +476,7 @@ void InitRxChannel(size_t len, unsigned int nbBuffer)
         iio_channel_disable(m_rx0_i); // Fix the bug https://github.com/analogdevicesinc/libiio/commit/02527e69ab57aa2eac995e964b58421b0f5af5ad
         iio_channel_disable(m_rx0_q);
         iio_buffer_destroy(m_rxbuf);
+        fprintf(stderr, "Destry rxbuff\n" );
         m_rxbuf = NULL;
     }
     if (len == 0) // We are in passthrough, don't get the stream because it is used externally
@@ -676,10 +677,11 @@ static uint64_t _timestamp_ns(void)
 
     return ((int64_t)tp.tv_sec * 1e9 + tp.tv_nsec);
 }
+
 ssize_t direct_rx_samples(short **RxBuffer)
 {
     ssize_t nsamples_rx = 0;
-    pthread_mutex_lock(&bufpluto_mutexrx);
+    pthread_mutex_lock(&bufpluto_mutexrx); 
     if(m_rxbuf==NULL)
     {
         pthread_mutex_unlock(&bufpluto_mutexrx);
@@ -854,6 +856,7 @@ void *rx_buffer_thread(void *arg)
             case rx_mode_websocket:
             {
                 size_t bin;
+                
                 if(m_sweep==0)
                 {
                     RxSize = direct_rx_samples(&RxBuffer);
@@ -883,7 +886,9 @@ void *rx_buffer_thread(void *arg)
                         }
                     }
                     //usleep(40000-m_sweep*1000);
-                    publishwebfft(powerdb,bin*m_sweep);
+                    usleep(40000);
+                    if(RxSize)
+                        publishwebfft(powerdb,bin*m_sweep);
                 }        
             }
             break;
