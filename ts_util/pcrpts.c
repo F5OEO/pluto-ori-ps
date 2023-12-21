@@ -547,7 +547,7 @@ for (size_t i = 0; i < BUFF_MAX_SIZE; i += 188)
 				}
 				else
 				{
-					TransDelay=0;
+					*TransDelay=0;
 				}
                 flag = GetPTSFromPacket(cur_packet, (unsigned long long *)&pts, (unsigned long long *)&dts, &PacketOffsetPTS, &PacketOffsetDTS);
                 if (flag == 2) // PTS
