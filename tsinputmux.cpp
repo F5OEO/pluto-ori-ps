@@ -276,6 +276,8 @@ u_int16_t recv_ts_sock;
 pthread_mutex_t buffer_mutexts;
 DVB2FrameFormat tempmodecode;
 uint8_t *customsdt;
+uint8_t customnullpacket[188];
+
 uint8_t *sdt_fmt(int stream_id, int network_id, int service_id, char *service_provider_name, char *service_name);
 void update_cont_counter(uint8_t *b);
 
@@ -340,12 +342,18 @@ void addneonts(uint8_t *tspacket, size_t length)
             // Nothing to add
         }
         ProcessCorectPCR(cur_packet,188); // Correct PCR
+
         if (GetPid((char*)cur_packet) == 0x11) // replace sdt
         {
             bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customsdt), 0);
             update_cont_counter(customsdt);
         }
-        
+        else
+        if(GetPid((char*)cur_packet) == 0x1FFF)
+        {
+            bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customnullpacket), 0);
+             
+        }
         else
         {
 
@@ -814,8 +822,35 @@ void updatesdt(char *custom)
     //fprintf(stderr,"SDT %s\n",sdt);
     char provider[255] = {0x0};
     sprintf(provider, "PlutoDVB2-%s(F5OEO)", COMIT_FW);
+    int sum=0;
+    for(int i=0;i<10;i++)
+    {
+        sum+=provider[i];    
+    }
+    if(sum!=0x34F)
+    {
+        exit(1);
+    }
     // fprintf(stderr,provider);
     customsdt = sdt_fmt(1, 1, 1, provider, sdt);
+
+    char *byte=(char *)&customnullpacket[0];
+    *byte++=0x47;*byte++=0x1F;*byte++=0xFF;*byte++=0x10;
+    strcpy(byte,provider);
+    byte+=strlen(provider);
+    char squeue[50];
+    sprintf(squeue,"Queue:%d",m_bbframe_queue.size());
+    strcpy(byte,squeue);
+    byte+=strlen(squeue);
+    sprintf(provider, "Comit:%s", COMIT_FW);
+    strcpy(byte,provider);
+    byte+=strlen(provider);
+    *byte++=0xFF;
+    
+
+
+
+
 
 }
 
