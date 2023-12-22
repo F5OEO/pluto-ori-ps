@@ -9,3 +9,4 @@ extern void ProcessCorectPCR(uint8_t *Buffer, size_t BUFF_MAX_SIZE);
 extern long GetMilliOfDay();
 extern uint64_t GetPcrTime(uint64_t PCR);
 extern long GetLatencytx(uint64_t PCR);
+extern size_t InspectCC(uint8_t *Buffer, size_t BUFF_MAX_SIZE);

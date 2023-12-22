@@ -1580,6 +1580,12 @@ void PubTelemetry()
     {
         publish("tx/dvbs2/ts/bitrate", float(m_SRtx * (m_efficiency / (float)4e6)));
         publish("tx/dvbs2/ts/fecvariable", (char *)TabFec[m_variable_ts_coderate]);
+        extern size_t Lastpidccerror;
+        if(Lastpidccerror!=8192)
+        {
+            publish("tx/dvbs2/ts/ccerror",Lastpidccerror);
+            Lastpidccerror=8192;
+        }
     }
     if (m_txmode == tx_dvbs2_gse)
     {

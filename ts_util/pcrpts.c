@@ -592,3 +592,54 @@ for (size_t i = 0; i < BUFF_MAX_SIZE; i += 188)
         cur_packet += 188;
     }
 }
+
+size_t InspectCC(uint8_t *Buffer, size_t BUFF_MAX_SIZE)
+{
+	static unsigned char pid_cc_table[8190]; /* PID table for the continuity counter of the TS packets */
+	static unsigned char repeated_cc_table[8190];
+	unsigned int adaptation_field;
+	static char init = 1;
+	size_t errorpid = 8192;
+	if (init == 1)
+	{
+		init = 0;
+		memset(pid_cc_table, 0x10, 8190);
+		memset(repeated_cc_table, 0, 8190);
+	}
+	uint8_t *packet = Buffer;
+	unsigned short pid;
+	for (size_t i = 0; i < BUFF_MAX_SIZE; i += 188)
+	{
+
+		pid = GetPid((char *)packet);
+		adaptation_field = (packet[3] & 0x30) >> 4;
+		if (pid_cc_table[pid] == 0x10)
+		{
+		}
+		else
+		{
+			if (((pid_cc_table[pid] + 1) % 16) != (packet[3] & 0xF))
+			{
+				if (adaptation_field == 0x0 || adaptation_field == 0x2)
+				{ /* reserved, no increment */
+					;
+				}
+				else if ((adaptation_field == 0x1) && ((packet[3] & 0x0f) == pid_cc_table[pid]) && (!repeated_cc_table[pid]))
+				{ /* double packet accepted only once */
+					repeated_cc_table[pid] = 1;
+				}
+				else if ((adaptation_field == 0x3) && ((packet[3] & 0x0f) == pid_cc_table[pid]) && (!repeated_cc_table[pid]))
+				{ /* double packet accepted only once */
+					repeated_cc_table[pid] = 1;
+				}
+				else
+				{
+					errorpid = pid;
+				}
+			}
+		}
+		pid_cc_table[pid] = packet[3] & 0xF;
+		packet += 188;
+	}
+	return errorpid;
+}

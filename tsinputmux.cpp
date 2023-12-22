@@ -117,6 +117,7 @@ char m_ts_filename[255];
 FILE *fdtsinput = NULL;
 int m_FileBitrate = 100000;
 int m_LatencySevenPacket = 1000;
+size_t Lastpidccerror=8192;
 
 bool addbbframe(uint8_t *bbframe, size_t len, size_t modcod)
 {
@@ -356,9 +357,10 @@ void addneonts(uint8_t *tspacket, size_t length)
         }
         else
         {
-
+            size_t piderror=InspectCC(cur_packet,188);
+            if(piderror!=8192) Lastpidccerror=piderror;
             bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(cur_packet), 0);
-        }
+        } 
         cur_packet += 188;
         if (bbframeptr != NULL)
         {
@@ -839,7 +841,7 @@ void updatesdt(char *custom)
     strcpy(byte,provider);
     byte+=strlen(provider);
     char squeue[50];
-    sprintf(squeue,"Queue:%d",m_bbframe_queue.size());
+    sprintf(squeue,"Queue:%d",m_bbframe_queue.size()); // Fixme ; this should be update regularly not only at start
     strcpy(byte,squeue);
     byte+=strlen(squeue);
     sprintf(provider, "Comit:%s", COMIT_FW);
