@@ -44,6 +44,10 @@
 #include <math.h>
 #include "nco_conf.h" // Oscimp nco
 
+#define SYSFS_AD9361_PHY 1
+#define SYSFS_AD9361_TX 3
+#define SYSFS_AD9361_RX 4
+
 char sCmdRoot[255];
 char sDtRoot[255];
 struct mosquitto *m_mosq;
@@ -58,6 +62,37 @@ enum
     cs16fft
 };
 size_t m_format = cs16;
+
+enum
+{
+    sysfs_ad9361_phy,
+    sysfs_ad9361_tx,
+    sysfs_ad9361_rx
+};
+
+size_t sFSdeviceNum[3]={0,0,0};
+
+void InitFSDevice()
+{
+    FILE *fdread = NULL;
+    char sPath[255];
+    for(size_t i=0;i<5;i++)
+    {
+        sprintf(sPath,"/sys/bus/iio/devices/iio:device%d/name",i);
+        
+        fdread = fopen(sPath, "r");
+        if(fdread!=0)
+        {
+        char svalue[255];
+        fscanf(fdread, "%s", svalue);
+        if(strcmp(svalue,"ad9361-phy")==0) sFSdeviceNum[sysfs_ad9361_phy]=i; 
+        if(strcmp(svalue,"cf-ad9361-dds-core-lpc")==0) sFSdeviceNum[sysfs_ad9361_tx]=i; 
+        if(strcmp(svalue,"cf-ad9361-lpc")==0) sFSdeviceNum[sysfs_ad9361_rx]=i;
+        fclose(fdread); 
+        }
+    }    
+    
+}
 
 bool publish(char *mqttkey, float value)
 {
@@ -79,15 +114,24 @@ bool publish(char *mqttkey, char *svalue)
     return true;
 }
 
-bool publishstatus(char *iio_key, char *mqttkey)
+
+void GetKey(size_t device,char *iio_key, char *svalue)
 {
     FILE *fdread = NULL;
     fdread = fopen(iio_key, "r");
-    char svalue[255];
-    // fgets(svalue,255,fdread);
+    char iio_path[255];
+    sprintf(iio_path,"/sys/bus/iio/devices/iio:device%d/%s",sFSdeviceNum[device],iio_key);
+    fdread = fopen(iio_path, "r");
     fscanf(fdread, "%s", svalue); // To avoid getting units
     fclose(fdread);
-    // fprintf(stderr,"%s %s\n",iio_key,svalue);
+}
+
+bool publishstatus(size_t device,char *iio_key, char *mqttkey)
+{
+    FILE *fdread = NULL;
+    
+    char svalue[255];
+    GetKey(device,iio_key,svalue);
     char pubkey[255];
     sprintf(pubkey, "%s%s", sDtRoot, mqttkey);
 
@@ -95,21 +139,17 @@ bool publishstatus(char *iio_key, char *mqttkey)
     return true;
 }
 
-void GetKey(char *iio_key, char *svalue)
-{
-    FILE *fdread = NULL;
-    fdread = fopen(iio_key, "r");
-    fscanf(fdread, "%s", svalue); // To avoid getting units
-    fclose(fdread);
-}
 
-bool SendCommand(char *skey, char *svalue)
+
+bool SendCommand(size_t device,char *skey, char *svalue)
 {
     if (strcmp(svalue, "?") == 0)
         return true; // This is a request status
+    char iio_path[255];
+    sprintf(iio_path,"/sys/bus/iio/devices/iio:device%d/%s",sFSdeviceNum[device],skey);
 
     FILE *fdwrite = NULL;
-    fdwrite = fopen(skey, "w");
+    fdwrite = fopen(iio_path, "w");
     if (fdwrite == NULL)
         return false;
     if (svalue[strlen(svalue) - 1] == 'M')
@@ -130,6 +170,38 @@ bool SendCommand(char *skey, char *svalue)
     fclose(fdwrite);
     return true;
 }
+
+bool SendDebugCommand(size_t device,char *skey, char *svalue)
+{
+    if (strcmp(svalue, "?") == 0)
+        return true; // This is a request status
+    char iio_path[255];
+    
+    sprintf(iio_path,"/sys/kernel/debug/iio/iio:device%d/%s",sFSdeviceNum[device],skey);
+
+    FILE *fdwrite = NULL;
+    fdwrite = fopen(iio_path, "w");
+    if (fdwrite == NULL)
+        return false;
+    if (svalue[strlen(svalue) - 1] == 'M')
+    {
+        svalue[strlen(svalue) - 1] = 0;
+        float value = atof(svalue) * 1e6;
+        sprintf(svalue, "%.0f", value);
+    }
+    if (svalue[strlen(svalue) - 1] == 'K')
+    {
+        svalue[strlen(svalue) - 1] = 0;
+        float value = atof(svalue) * 1e3;
+        sprintf(svalue, "%.0f", value);
+    }
+
+    fprintf(fdwrite, "%s", svalue);
+    
+    fclose(fdwrite);
+    return true;
+}
+
 
 float set_filter_gain(double *filter, float gain, int ntaps)
 {
@@ -227,9 +299,9 @@ void load_ad9363fir(double *fir, int taps, int ratio, bool enable, float gain, i
     // Seems that enable only one has some board effect to other
     /*
     if(tx&&enable)
-      SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "1"); //Enable FIR TX
+      SendCommand(sysfs_ad9361_phy,"out_voltage_filter_fir_en", "1"); //Enable FIR TX
    if((!tx)&&enable)
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "1");  //Enable FIR RX
+        SendCommand(sysfs_ad9361_phy,"in_voltage_filter_fir_en", "1");  //Enable FIR RX
     */
     free(buf);
 }
@@ -295,8 +367,8 @@ bool ComputeSR(int tx,char *svalue)
               publish("tx/finalsr", m_finaltxsr);
 
         }
-        publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
-        //publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "rx/sr");
+        publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "sr");
+        //publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "rx/sr");
 
         return true; // This is a request status
     }
@@ -371,8 +443,8 @@ bool ComputeRxSR(char *svalue)
 
             publish("rx/finalsr", m_finalrxsr);
         }
-        publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
-        // publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "rx/sr");
+        publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "sr");
+        // publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "rx/sr");
 
         return true; // This is a request status
     }
@@ -444,8 +516,8 @@ bool ComputeRxSR(char *svalue)
     sprintf(sSR, "%.0f", ADCSR);
     m_adcdacsr = RequestSR * fpgadecim;
     // First set result SR
-    SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
-    SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR); // RX Fpga
+    SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
+    SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR); // RX Fpga
 
     //  SSCANF de /sys/bus/iio/devices/iio:device0/rx_path_rates
     // NbTaps = ADC/RXSAMP * 16 !!!!! FixMe for better filtering
@@ -456,48 +528,48 @@ bool ComputeRxSR(char *svalue)
         setad9363filter(1, ad9363decim, 1.0 / ad9363decim, typelpf, 1.0, false, true, false);
         setad9363filter(1, ad9363decim, 1.0 / ad9363decim, typelpf, 1.0, true, true, true); // We need also to do tx for now
 
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "1");
+        SendCommand(sysfs_ad9361_phy,"in_out_voltage_filter_fir_en", "1");
 
         sprintf(sSR, "%.0f", ADCSR / ad9363decim);
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
+        SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
     }
     else
     {
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "0");
-        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "0"); //Disable  ADFIR
-        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        SendCommand(sysfs_ad9361_phy,"in_out_voltage_filter_fir_en", "0");
+        // SendCommand(sysfs_ad9361_phy,"in_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        // SendCommand(sysfs_ad9361_phy,"out_voltage_filter_fir_en", "0"); //Disable  ADFIR
     }
 
     if (fpgadecim > 1.0)
     {
         sprintf(sSR, "%.0f", ADCSR / 8 / ad9363decim);
         fprintf(stderr, "adcsr %f fpga %s\n", ADCSR, sSR);
-        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     else
     {
         sprintf(sSR, "%.0f", ADCSR / ad9363decim);
-        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     // Automatic Analog LPF bandwidth
     if (RequestSR > 200e3)
     {
         sprintf(sSR, "%.0f", RequestSR);
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", sSR);
+        SendCommand(sysfs_ad9361_phy,"in_voltage_rf_bandwidth", sSR);
     }
     else
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", "200000"); // Mini bandwidth
+        SendCommand(sysfs_ad9361_phy,"in_voltage_rf_bandwidth", "200000"); // Mini bandwidth
     m_finalrxsr = RequestSR;
     publish("finalsr", m_finalrxsr);
     publish("rx/finalsr", m_finalrxsr);
     publish("rx/fpgadecim", (float)fpgadecim);
     publish("rx/ad9361decim", (float)ad9363decim);
-    publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
-    publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "rx/sr");
+    publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "sr");
+    publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "rx/sr");
 
     return result;
 }
@@ -511,8 +583,8 @@ bool ComputeTxSR(char *svalue)
             // publish("finalsr", m_finaltxsr);
             publish("tx/finalsr", m_finaltxsr);
         }
-        publishstatus("/sys/bus/iio/devices/iio:device0/out_voltage_sampling_frequency", "sr");
-        // publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "tx/sr");
+        publishstatus(sysfs_ad9361_phy,"out_voltage_sampling_frequency", "sr");
+        // publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "tx/sr");
         return true; // This is a request status
     }
 #define FPGA_INTERPOL (8.0)
@@ -589,13 +661,13 @@ bool ComputeTxSR(char *svalue)
     // First set result SR
 
     char sMute[10];
-    GetKey("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", sMute);
+    GetKey(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", sMute);
     // Mute if we are using interpol
     if (fpgainterpol * ad9363interpol > 1)
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "1");
-    SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
-    SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-    SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", "1");
+    SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
+    SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+    SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
 
     // AD9363Interpol
     if (ad9363interpol > 1.0)
@@ -608,50 +680,50 @@ bool ComputeTxSR(char *svalue)
 
         // setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,true);
         // setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,false);
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "1");
-        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "1");
-        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "1");
+        SendCommand(sysfs_ad9361_phy,"in_out_voltage_filter_fir_en", "1");
+        // SendCommand(sysfs_ad9361_phy,"out_voltage_filter_fir_en", "1");
+        // SendCommand(sysfs_ad9361_phy,"in_voltage_filter_fir_en", "1");
 
         sprintf(sSR, "%.0f", DACSR / ad9363interpol);
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
+        SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
     }
     else
     {
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "0");
-        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "0"); //Disable  ADFIR
-        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        SendCommand(sysfs_ad9361_phy,"in_out_voltage_filter_fir_en", "0");
+        // SendCommand(sysfs_ad9361_phy,"in_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        // SendCommand(sysfs_ad9361_phy,"out_voltage_filter_fir_en", "0"); //Disable  ADFIR
     }
 
     if (fpgainterpol > 1.0)
     {
         sprintf(sSR, "%.0f", DACSR / 8 / ad9363interpol);
         fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
-        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     else
     {
         sprintf(sSR, "%.0f", DACSR / ad9363interpol);
-        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     // Automatic Analog LPF bandwidth
     if (RequestSR > 200e3)
     {
         sprintf(sSR, "%.0f", RequestSR);
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", sSR);
+        SendCommand(sysfs_ad9361_phy,"out_voltage_rf_bandwidth", sSR);
     }
     else
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", "200000"); // Mini bandwidth
+        SendCommand(sysfs_ad9361_phy,"out_voltage_rf_bandwidth", "200000"); // Mini bandwidth
     m_finaltxsr = RequestSR;
     // Unmute if we are not muted before
     if (atoi(sMute) == 0)
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "0");
+        SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", "0");
     publish("tx/finalsr", m_finaltxsr);
-    publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
-    publishstatus("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", "tx/sr");
+    publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "sr");
+    publishstatus(sysfs_ad9361_tx,"out_voltage_sampling_frequency", "tx/sr");
     publish("tx/fpgainterpol", (float)fpgainterpol);
     publish("tx/ad9363interpol", (float)ad9363interpol);
 
@@ -669,10 +741,10 @@ bool ComputeTxSRDVBS2(char *svalue)
             // publish("finalsr", m_finaltxsr);
             publish("tx/finalsr", m_finaltxsr);
         }
-        publishstatus("/sys/bus/iio/devices/iio:device0/out_voltage_sampling_frequency", "sr");
+        publishstatus(sysfs_ad9361_phy,"out_voltage_sampling_frequency", "sr");
         
         
-        // publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "tx/sr");
+        // publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "tx/sr");
         return true; // This is a request status
     }
 #define FPGA_INTERPOL (8.0)
@@ -743,13 +815,13 @@ bool ComputeTxSRDVBS2(char *svalue)
     // First set result SR
 
     char sMute[10];
-    GetKey("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", sMute);
+    GetKey(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", sMute);
     // Mute if we are using interpol
     if (fpgainterpol * ad9363interpol > 1)
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "1");
-    SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
-    SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-    SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", "1");
+    SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
+    SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+    SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
 
     // AD9363Interpol
     if (ad9363interpol > 1.0)
@@ -762,46 +834,46 @@ bool ComputeTxSRDVBS2(char *svalue)
 
         // setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,true);
         // setad9363filter(1, ad9363interpol, 0.35, typerrc, 1.0, false,true,false);
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "1");
-        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "1");
-        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "1");
+        SendCommand(sysfs_ad9361_phy,"in_out_voltage_filter_fir_en", "1");
+        // SendCommand(sysfs_ad9361_phy,"out_voltage_filter_fir_en", "1");
+        // SendCommand(sysfs_ad9361_phy,"in_voltage_filter_fir_en", "1");
 
         sprintf(sSR, "%.0f", DACSR / ad9363interpol);
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", sSR);
+        SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
     }
     else
     {
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_out_voltage_filter_fir_en", "0");
-        // SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_filter_fir_en", "0"); //Disable  ADFIR
-        // SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        SendCommand(sysfs_ad9361_phy,"in_out_voltage_filter_fir_en", "0");
+        // SendCommand(sysfs_ad9361_phy,"in_voltage_filter_fir_en", "0"); //Disable  ADFIR
+        // SendCommand(sysfs_ad9361_phy,"out_voltage_filter_fir_en", "0"); //Disable  ADFIR
     }
 
     if (fpgainterpol > 1.0)
     {
         sprintf(sSR, "%.0f", DACSR / 8 / ad9363interpol);
         //fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
-        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     else
     {
         sprintf(sSR, "%.0f", DACSR / ad9363interpol);
-        SendCommand("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand("/sys/bus/iio/devices/iio:device3/in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     // Automatic Analog LPF bandwidth TX
     if (RequestSR > 200e3)
     {
         sprintf(sSR, "%.0f", RequestSR*fpgainterpol);
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", sSR);
+        SendCommand(sysfs_ad9361_phy,"out_voltage_rf_bandwidth", sSR);
        
     }
     else
     {
         
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage_rf_bandwidth", "200000"); // Mini bandwidth
+        SendCommand(sysfs_ad9361_phy,"out_voltage_rf_bandwidth", "200000"); // Mini bandwidth
        
     }    
 
@@ -811,23 +883,23 @@ bool ComputeTxSRDVBS2(char *svalue)
     {
         sprintf(sSR, "%.0f",RequestSR*fpgainterpol);
         
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", sSR); //Set it also to rx
+        SendCommand(sysfs_ad9361_phy,"in_voltage_rf_bandwidth", sSR); //Set it also to rx
     }
     else
     {
         
-        SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth","200000");
+        SendCommand(sysfs_ad9361_phy,"in_voltage_rf_bandwidth","200000");
     }
     */
     m_finaltxsr = RequestSR;
     // Unmute if we are not muted before
     if (atoi(sMute) == 0)
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", "0");
+        SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", "0");
     publish("tx/fpgainterpol", (float)fpgainterpol);
     publish("tx/ad9363interpol", (float)ad9363interpol);    
     publish("tx/finalsr", m_finaltxsr);
-    publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage_sampling_frequency", "sr");
-    publishstatus("/sys/bus/iio/devices/iio:device2/out_voltage_sampling_frequency", "tx/sr");
+    publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "sr");
+    publishstatus(sysfs_ad9361_tx,"out_voltage_sampling_frequency", "tx/sr");
    
 
     return result;
@@ -898,6 +970,7 @@ bool publishcmd()
 
 void PubTelemetry()
 {
+    
     FILE *fdserial = NULL;
     char sSerial[255];
     fdserial = fopen("/sys/firmware/devicetree/base/model", "r");
@@ -905,9 +978,9 @@ void PubTelemetry()
     fclose(fdserial);
     publish("system/device", sSerial);
     // RSSI
-    publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage0_rssi", "rx/rssi");
+    publishstatus(sysfs_ad9361_phy,"in_voltage0_rssi", "rx/rssi");
     // AD TEMPERATURE
-    publishstatus("/sys/bus/iio/devices/iio:device0/in_temp0_input", "temperature_ad");
+    publishstatus(sysfs_ad9361_phy,"in_temp0_input", "temperature_ad");
 
     // Publish complete status by sending cmd with ?
     char svalue[2500];
@@ -916,6 +989,7 @@ void PubTelemetry()
     {
         HandleCommand(strcmd[i], "?");
     }
+    
 }
 
 bool HandleCommand(char *key, char *soriginvalue)
@@ -971,36 +1045,36 @@ bool HandleCommand(char *key, char *soriginvalue)
     case cmd_rxfrequency:
     {
         if (strcmp(svalue, "?") != 0)
-            SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_frequency", svalue);
-        publishstatus("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_frequency", key);
+            SendCommand(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_frequency", svalue);
+        publishstatus(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_frequency", key);
         break;
     }
 
     case cmd_rxmute:
     {
-        SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_powerdown", svalue);
-        publishstatus("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_powerdown", key);
+        SendCommand(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_powerdown", svalue);
+        publishstatus(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_powerdown", key);
         break;
     }
 
     case cmd_rxmodegain: // {manual,slow_attack,hybrid,fast_attack}
     {
         if (strcmp(svalue, "?") != 0)
-            SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage0_gain_control_mode", svalue);
-        publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage0_gain_control_mode", key);
+            SendCommand(sysfs_ad9361_phy,"in_voltage0_gain_control_mode", svalue);
+        publishstatus(sysfs_ad9361_phy,"in_voltage0_gain_control_mode", key);
         break;
     }
     case cmd_rxgain:
     {
         // First go to manual gain
         if (strcmp(svalue, "?") != 0)
-            SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage0_gain_control_mode", "manual");
-        publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage0_gain_control_mode", strcmd[cmd_rxmodegain]);
+            SendCommand(sysfs_ad9361_phy,"in_voltage0_gain_control_mode", "manual");
+        publishstatus(sysfs_ad9361_phy,"in_voltage0_gain_control_mode", strcmd[cmd_rxmodegain]);
 
         // THen set manual gain
         if (strcmp(svalue, "?") != 0)
-            SendCommand("/sys/bus/iio/devices/iio:device0/in_voltage0_hardwaregain", svalue);
-        publishstatus("/sys/bus/iio/devices/iio:device0/in_voltage0_hardwaregain", key);
+            SendCommand(sysfs_ad9361_phy,"in_voltage0_hardwaregain", svalue);
+        publishstatus(sysfs_ad9361_phy,"in_voltage0_hardwaregain", key);
         break;
     }
 
@@ -1030,9 +1104,9 @@ bool HandleCommand(char *key, char *soriginvalue)
     case cmd_txfrequency:
     {
         if (strcmp(svalue, "?") != 0)
-            SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_frequency", svalue);
+            SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_frequency", svalue);
 
-        publishstatus("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_frequency", key);
+        publishstatus(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_frequency", key);
         break;
     }
 
@@ -1040,19 +1114,19 @@ bool HandleCommand(char *key, char *soriginvalue)
     {
         if (strcmp(svalue, "?") != 0)
         {
-            SendCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", svalue);
+            SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", svalue);
             if (strcmp(svalue, "1")) // ptt off
             {
-                SendCommand("/sys/kernel/debug/iio/iio:device0/direct_reg_access", "0x26 0x10");
-                SendCommand("/sys/kernel/debug/iio/iio:device0/direct_reg_access", "0x27 0x00");
+                SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x26 0x10");
+                SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x27 0x00");
             }
             else // ptt on
             {
-                SendCommand("/sys/kernel/debug/iio/iio:device0/direct_reg_access", "0x26 0x10");
-                SendCommand("/sys/kernel/debug/iio/iio:device0/direct_reg_access", "0x27 0x50");
+                SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x26 0x10");
+                SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x27 0x50");
             }
         }
-        publishstatus("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown", key);
+        publishstatus(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", key);
         break;
     }
 
@@ -1066,23 +1140,28 @@ bool HandleCommand(char *key, char *soriginvalue)
     {
         if (strcmp(svalue, "?") != 0)
         {
-            SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
+            SendCommand(sysfs_ad9361_phy,"out_voltage0_hardwaregain", svalue);
             
         }
-        publishstatus("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", key);
+        publishstatus(sysfs_ad9361_phy,"out_voltage0_hardwaregain", key);
         break;
     }
+    //FixMe : Remove for now , until include oscimp lib
     case cmd_txnco:
     {
+        
 #define NCO_ACCUM_SIZE 28
         static float m_nco = 0;
         if (strcmp(svalue, "?") != 0)
         {
+            
             m_nco = atof(svalue);
-            fprintf(stderr, "adcdacsr %d\n", m_adcdacsr);
-            // Fixme! NCO is before ad9361 iterpolator : so could be outside of band
+            
+            // NCO is before ad9361 iterpolator : so could be outside of band
+           
             nco_counter_send_conf("/dev/nco00", m_adcdacsr, m_nco >= 0 ? m_nco : m_adcdacsr + m_nco,
                                   NCO_ACCUM_SIZE, 0, 1, 0); // 0, 1, 1 => offset, PINC HW/SF, POFF HW/SF;
+                                 
         }
         publish("tx/nco", m_nco);
 
@@ -1097,6 +1176,7 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
 {
     m_mosq = mosq;
     sprintf(sDtRoot, "dt/pluto/%s/", sSerial);
-    SendCommand("/sys/bus/iio/devices/iio:device0/calib_mode", "manual_tx_quad");
+    InitFSDevice();
+    SendCommand(sysfs_ad9361_phy,"calib_mode", "manual_tx_quad");
     // iio_device_attr_write(dev, "calib_mode", "manual_tx_quad");
 }
