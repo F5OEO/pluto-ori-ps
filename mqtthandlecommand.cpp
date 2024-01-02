@@ -35,7 +35,7 @@
 
 #include <pthread.h>
 
-#include <jansson.h>
+//#include <jansson.h>
 
 //#include "ad9363.h"
 

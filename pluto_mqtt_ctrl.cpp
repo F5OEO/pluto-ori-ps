@@ -36,7 +36,7 @@
 #include <pthread.h>
 
 #include "mymqtt.h"
-#include <jansson.h>
+//#include <jansson.h>
 
 #include "mqtthandlecommand.h"
 

@@ -37,7 +37,7 @@
 #include <pthread.h>
 #include <iio.h>
 #include "iio-private.h"
-#include <jansson.h>
+//#include <jansson.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <net/if.h>
@@ -408,14 +408,14 @@ inline void udp_send(char *b, int len)
     for (index = 0; index < len; index += UDP_BUFF_MAX_SIZE)
     {
 
-        sendto(m_sock, b + index, UDP_BUFF_MAX_SIZE, MSG_ZEROCOPY, (struct sockaddr *)&m_client, sizeof(m_client));
+        sendto(m_sock, b + index, UDP_BUFF_MAX_SIZE,0 /*MSG_ZEROCOPY*/, (struct sockaddr *)&m_client, sizeof(m_client));
     }
 }
 
 inline size_t udp_receive(unsigned char *b)
 {
 
-    size_t rcvlen = recv(m_sock, b, UDP_BUFF_MAX_BBFRAME, MSG_ZEROCOPY);
+    size_t rcvlen = recv(m_sock, b, UDP_BUFF_MAX_BBFRAME, 0/*MSG_ZEROCOPY*/);
     return rcvlen;
 }
 
@@ -1774,7 +1774,7 @@ bool HandleCommand(char *key, char *svalue)
             publish("rx/webfft/frequency", (float)WebfftRxFrequency);
             break;
         }
-        WebfftRxFrequency = atol(svalue);
+        WebfftRxFrequency = atoll(svalue);
         fprintf(stderr,"New webfreq %lld\n",WebfftRxFrequency);
         m_sweep=PrepareSpan(WebfftRxFrequency,m_SRtx*fpgainterpol,WebfftRxSpan);
         //publish("rx/webfft/frequency", (float)WebfftRxFrequency);
@@ -1789,7 +1789,7 @@ bool HandleCommand(char *key, char *svalue)
             publish("rx/webfft/span", (float)WebfftRxSpan);
             break;
         }
-        WebfftRxSpan = atol(svalue);
+        WebfftRxSpan = atoll(svalue);
         m_sweep=PrepareSpan(WebfftRxFrequency,m_SRtx*fpgainterpol,WebfftRxSpan);
         ///publish("rx/webfft/span", (float)WebfftRxSpan);
         break;
