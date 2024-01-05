@@ -47,8 +47,8 @@ install:
 	cp agctest.sh $(PAPR_ORI)
 	cp watchconsoletx.sh $(PAPR_ORI)
 	cp relay.sh $(PAPR_ORI)
-	./makepatern.sh
-	cp mire.ts $(PAPR_ORI)
+#./makepatern.sh
+#cp mire.ts $(PAPR_ORI)
 	cp www/* -r $(PAPR_WWW)
 	cp history.txt -r $(PAPR_ORI)
 clean:
