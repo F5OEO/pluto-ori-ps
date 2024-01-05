@@ -29,8 +29,8 @@ pluto_stream: pluto_stream.cpp mymqtt.h mqtthandlestream.h mqtthandlestream.cpp 
 	$(TOOLS_PATH) $(CXX) $(INC) $(FLAGS) -DCOMIT_FW=\"$(VER)\" -o pluto_stream gsemux.cpp dvbs2neon/dvbs2neon0v43.S ts_util/sdt.cpp ts_util/pcrpts.c pluto_stream.cpp mqtthandlestream.cpp iiofshelper.cpp tsinputmux.cpp iqtofft.cpp -lm -lrt -lpthread -lmosquitto  -lgse	-lNE10 -lcivetweb
 install: 
 	
-	cp pluto_stream $(PAPR_ORI)
-	cp pluto_mqtt_ctrl $(PAPR_ORI)
+#cp pluto_stream $(PAPR_ORI)
+#cp pluto_mqtt_ctrl $(PAPR_ORI)
 	cp qo100initdvb.sh $(PAPR_ORI)
 	cp gain.sh $(PAPR_ORI)
 	cp mute.sh $(PAPR_ORI)
