@@ -18,8 +18,8 @@ CC=$(CROSS_COMPILE)gcc
 FLAGS = -O2 -fpermissive -Wall -Wno-write-strings -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-pointer-arith -Wno-format-zero-length -Wno-sign-compare -liio -mfpu=neon -mfloat-abi=hard
 
 INC=-I./include_gse/gse
-VER=$(shell git describe --tags)
-$(shell git log --pretty=format:"%h - %ad : %s" > history.txt)
+VER=$(shell cd $(CURDIR) && git describe --tags)
+$(shell cd $(CURDIR) && git log --pretty=format:"%h - %ad : %s" > history.txt)
 
 all: pluto_mqtt_ctrl pluto_stream 
 
