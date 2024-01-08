@@ -49,7 +49,7 @@ install:
 	cp relay.sh $(PAPR_ORI)
 #./makepatern.sh
 #cp mire.ts $(PAPR_ORI)
-	cp www/* -r $(PAPR_WWW)
+#	cp www/* -r $(PAPR_WWW)
 	cp history.txt -r $(PAPR_ORI)
 clean:
 	rm -f  pluto_mqtt_ctrl pluto_stream bbgse
