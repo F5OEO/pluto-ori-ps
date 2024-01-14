@@ -234,6 +234,14 @@ enum
 int m_Fecmode = fec_fix;
 int m_FecRange = 10;
 
+enum
+{
+    ROFF20,
+    ROFF15
+};
+
+int m_firfilter=ROFF20;
+
 queue<buffer_t *> m_bbframe_queue;
 
 float TheoricMER[] = {0, -2.4, -1.2, 0, 1.0, 2.2, 3.2, 4.0, 4.6, 5.2, 6.2, 6.5, 5.5, 6.6, 7.9, 9.4, 10.6, 11.0, 9.0, 10.2, 11.0, 11.6, 12.9, 13.1, 12.6, 13.6, 14.3, 15.7, 16.1};
@@ -243,14 +251,25 @@ void ResetDVBS2()
 
     size_t value = ReadRegister(0x79020000 + 0x40BC);
 
-    WriteRegister(0x79020000 + 0x40BC, (value & 0xFFF1) | 0);
+    WriteRegister(0x79020000 + 0x40BC, (value & 0xFFFD) | 0);
     usleep(100);
-    WriteRegister(0x79020000 + 0x40BC, (value & 0xFFF1) | 2);
+    WriteRegister(0x79020000 + 0x40BC, (value & 0xFFFD) | 2);
 
     // int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
 
     // int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, 0);
     //  fprintf(stderr,"dvbs2neon status %d \n",status1);
+}
+
+void SwitchFirFilter(int NoFilter)
+{
+
+    size_t value = ReadRegister(0x79020000 + 0x40BC);
+
+    WriteRegister(0x79020000 + 0x40BC, (value & 0xFFF3) | (NoFilter<<2) | (1<<3));
+    usleep(100);
+    WriteRegister(0x79020000 + 0x40BC, (value & 0xFFF3) | (NoFilter<<2) |  (0<<3));
+    
 }
 
 #define switchsrc 0x43C00000
@@ -1092,7 +1111,7 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate, uint Pilots)
             // int status = dvbs2neon_control(STREAM0, CONTROL_SET_OUTPUT_BUFFER, (uint32)BBFrameNeonBuff, 0); // CONTROL_SET_OUTPUT_BUFFER
             //  fprintf(stderr, "Status %d \n", status);
         }
-        setneonmodcod(Constellation, CodeRate, FrameType, Pilots);
+        setneonmodcod(Constellation, CodeRate, FrameType, Pilots,m_firfilter);
         fprintf(stderr, "Efficiency %d NetBitrate = %f !\n", m_efficiency, float(m_SRtx * (m_efficiency / 4e6)));
         // fprintf(stderr, "modocodgse  %d \n", (FrameType == 0 ? 0 : 11) + CodeRate);
         setgsemodcod(Constellation, CodeRate, FrameType, Pilots);
@@ -1516,7 +1535,7 @@ bool SendCommand(char *skey, char *svalue)
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst","rx/stream/mode","rx/stream/average","rx/webfft/frequency","rx/webfft/span",
                       "tx/stream/run", "tx/stream/mode" ,
                       "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable","tx/dvbs2/sdt",
-                      "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain","tx/dvbs2/digitalgain", ""};
+                      "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain","tx/dvbs2/digitalgain","tx/dvbs2/firfilter", ""};
 enum defidx
 {
     listcmd,
@@ -1544,7 +1563,8 @@ enum defidx
     cmd_txdvbs2tsourceip,
     cmd_txdvbs2tsourcefile,
     cmd_txgain,
-    cmd_txdigitalgain
+    cmd_txdigitalgain,
+    cmd_txfirfilter
 
 };
 
@@ -2184,6 +2204,26 @@ bool HandleCommand(char *key, char *svalue)
         }    
         break;
     }
+
+    case cmd_txfirfilter:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("tx/dvbs2/firfilter",(float) m_firfilter);
+            break;
+        }
+        
+        if(atoi(svalue)<2)
+        {
+            m_firfilter=atoi(svalue);
+            SwitchFirFilter(m_firfilter);
+            publish("tx/dvbs2/firfilter",(float) m_firfilter);
+        }    
+        break;
+    }
+
+    
 
 
     }

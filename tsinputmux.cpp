@@ -689,7 +689,7 @@ void *rx_ts_thread(void *arg)
     }
 }
 
-void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilots)
+void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilots,int filter)
 {
 
     switch (Constellation)
@@ -716,7 +716,11 @@ void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilot
         fmt.pilots = PILOTS_ON;
     else
         fmt.pilots = PILOTS_OFF;
-    fmt.roll_off = RO_0_20;
+    if(filter==0)    
+        fmt.roll_off = RO_0_20;
+     if(filter==1)    
+        fmt.roll_off = RO_0_15;
+        
 
     // FixMe : Modcod should be changed ONLY when a bbframe is complete or at startup
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
