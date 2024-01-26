@@ -280,6 +280,37 @@ void update_web_param(float freqrx, float span)
 
 // ********************** FASTLOCK FUNCTIONS **********************************
 
+enum
+{
+    sysfs_ad9361_phy,
+    sysfs_ad9361_tx,
+    sysfs_ad9361_rx
+};
+
+size_t sFSdeviceNum[3]={0,0,0};
+
+void InitFSDevice()
+{
+    FILE *fdread = NULL;
+    char sPath[255];
+    for(size_t i=0;i<5;i++)
+    {
+        sprintf(sPath,"/sys/bus/iio/devices/iio:device%d/name",i);
+        
+        fdread = fopen(sPath, "r");
+        if(fdread!=0)
+        {
+        char svalue[255];
+        fscanf(fdread, "%s", svalue);
+        if(strcmp(svalue,"ad9361-phy")==0) sFSdeviceNum[sysfs_ad9361_phy]=i; 
+        if(strcmp(svalue,"cf-ad9361-dds-core-lpc")==0) sFSdeviceNum[sysfs_ad9361_tx]=i; 
+        if(strcmp(svalue,"cf-ad9361-lpc")==0) sFSdeviceNum[sysfs_ad9361_rx]=i;
+        fclose(fdread); 
+        }
+    }    
+    
+}
+
 void GetiioKey(char *iio_key, char *svalue)
 {
     FILE *fdread = NULL;
@@ -288,9 +319,12 @@ void GetiioKey(char *iio_key, char *svalue)
     fclose(fdread);
 }
 
-bool SendiioCommand(char *skey, char *svalue)
+bool SendiioCommand(size_t device,char *skey, char *svalue)
 {
     FILE *fdwrite = NULL;
+     char iio_path[255];
+    sprintf(iio_path,"/sys/bus/iio/devices/iio:device%d/%s",sFSdeviceNum[device],skey);
+   
     fdwrite = fopen(skey, "w");
     if (fdwrite == NULL)
         return false;
@@ -301,76 +335,34 @@ bool SendiioCommand(char *skey, char *svalue)
     return true;
 }
 
-bool SendiioCommand(char *skey, int64_t value)
+bool SendiioCommand(size_t device,char *skey, int64_t value)
 {
     char svalue[255];
     sprintf(svalue, "%lld", value);
-    return SendiioCommand(skey, svalue);
-}
-
-char fastlock_param_rx[8][255];
-char fastlock_param_tx[8][255];
-
-char *GetFastlockParam(int fastlock_profile_no, bool tx)
-{
-
-    struct iio_channel *chn = NULL;
-    if (tx)
-    {
-
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_fastlock_store", fastlock_profile_no);
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_fastlock_save", fastlock_profile_no);
-        GetiioKey("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_fastlock_save", fastlock_param_tx[fastlock_profile_no]);
-
-        return fastlock_param_tx[fastlock_profile_no];
-    }
-    else
-    {
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_store", fastlock_profile_no);
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_save", fastlock_profile_no);
-        GetiioKey("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_save", fastlock_param_rx[fastlock_profile_no]);
-        return fastlock_param_rx[fastlock_profile_no];
-    }
-}
-
-void SetFastlockParam(char *fastlockparam, int fastlock_profile_no, bool tx)
-{
-
-    fastlockparam[0] = '0' + fastlock_profile_no; // We overwrite the profile
-                                                  // fprintf(stderr,"FastProfile %d : %s\n",fastlock_profile_no,fastlockparam);
-    if (tx)
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_fastlock_load", fastlock_profile_no);
-    else
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_load", fastlock_profile_no);
-}
-
-void SetFastlockTune(int fastlock_profile_no, bool tx)
-{
-
-    // iio_channel_attr_write_longlong(chn,"fastlock_recall",fastlock_profile_no);
+    return SendiioCommand(device,skey, svalue);
 }
 
 void RecallFastlockTune(int fastlock_profile_no)
 {
     if (fastlock_profile_no < 8)
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_recall", fastlock_profile_no);
+        SendiioCommand(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_fastlock_recall", fastlock_profile_no);
 }
 
 size_t PrepareSpan(uint64_t CenterFrequency, uint64_t SR, uint64_t span)
 {
-    SendiioCommand("/sys/kernel/debug/iio/iio:device0/adi,rx-fastlock-pincontrol-enable", "0");
+    SendiioCommand(sysfs_ad9361_phy,"adi,rx-fastlock-pincontrol-enable", "0");
 
    
 
     if (SR> 200e3)
     {
                
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth", SR); //Set it also to rx
+        SendiioCommand(sysfs_ad9361_phy,"in_voltage_rf_bandwidth", SR); //Set it also to rx
     }
     else
     {
         
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/in_voltage_rf_bandwidth",200000);
+        SendiioCommand(sysfs_ad9361_phy,"in_voltage_rf_bandwidth",200000);
     }
 
      SR = SR/2; // Because we drop 1/2 bin  ! 1/4 at begin and 1/4 at end
@@ -378,8 +370,8 @@ size_t PrepareSpan(uint64_t CenterFrequency, uint64_t SR, uint64_t span)
      char svalue[255];
     if (span <= SR) // We need to zoom
     {
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_frequency", CenterFrequency);
-        SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_store", "0");
+        SendiioCommand(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_frequency", CenterFrequency);
+        SendiioCommand(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_fastlock_store", "0");
        
         sprintf(svalue,"%lld",SR);
         WebfftRxSpan=SR;
@@ -422,9 +414,9 @@ size_t PrepareSpan(uint64_t CenterFrequency, uint64_t SR, uint64_t span)
             for (size_t i = 0; i < NbSweep; i++)
             {
                 
-                SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_frequency", sweepfreq);
+                SendiioCommand(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_frequency", sweepfreq);
                 sweepfreq+=SR;
-                SendiioCommand("/sys/bus/iio/devices/iio:device0/out_altvoltage0_RX_LO_fastlock_store", i);
+                SendiioCommand(sysfs_ad9361_phy,"out_altvoltage0_RX_LO_fastlock_store", i);
             }
         }
     }
@@ -569,7 +561,7 @@ void init_fft(uint16_t fft_size, uint16_t average)
 {
     m_fftsize = fft_size;
     m_average = average;
-
+    InitFSDevice();
     // CivetWeb INIT
     mg_init_library(MG_FEATURES_WEBSOCKET);
     if (mg_check_feature(MG_FEATURES_WEBSOCKET) > 0)

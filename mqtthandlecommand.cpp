@@ -293,7 +293,9 @@ void load_ad9363fir(double *fir, int taps, int ratio, bool enable, float gain, i
     // fprintf(stderr,"Coef:%s\n",buf);
 
     FILE *fdwrite = NULL;
-    fdwrite = fopen("/sys/bus/iio/devices/iio:device0/filter_fir_config", "wb");
+    char iio_path[255];
+    sprintf(iio_path,"/sys/bus/iio/devices/iio:device%d/filter_fir_config",sFSdeviceNum[sysfs_ad9361_phy]);
+    fdwrite = fopen(iio_path, "wb");
     fwrite(buf, clen, 1, fdwrite);
     fclose(fdwrite);
     // Seems that enable only one has some board effect to other
@@ -519,7 +521,7 @@ bool ComputeRxSR(char *svalue)
     SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
     SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR); // RX Fpga
 
-    //  SSCANF de /sys/bus/iio/devices/iio:device0/rx_path_rates
+    
     // NbTaps = ADC/RXSAMP * 16 !!!!! FixMe for better filtering
 
     // AD9363Decim
