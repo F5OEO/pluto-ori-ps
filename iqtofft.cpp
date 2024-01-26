@@ -289,8 +289,9 @@ enum
 
 size_t sFSdeviceNum[3]={0,0,0};
 
-void InitFSDevice()
+void InitiioFSDevice()
 {
+    
     FILE *fdread = NULL;
     char sPath[255];
     for(size_t i=0;i<5;i++)
@@ -319,13 +320,16 @@ void GetiioKey(char *iio_key, char *svalue)
     fclose(fdread);
 }
 
-bool SendiioCommand(size_t device,char *skey, char *svalue)
+bool SendiioCommand(size_t device,char *skey, char *svalue,bool debug=false)
 {
     FILE *fdwrite = NULL;
      char iio_path[255];
-    sprintf(iio_path,"/sys/bus/iio/devices/iio:device%d/%s",sFSdeviceNum[device],skey);
-   
-    fdwrite = fopen(skey, "w");
+     if(debug)
+        sprintf(iio_path,"/sys/kernel/debug/iio/iio:device%d/%s",sFSdeviceNum[device],skey); 
+     else
+        sprintf(iio_path,"/sys/bus/iio/devices/iio:device%d/%s",sFSdeviceNum[device],skey);
+    
+    fdwrite = fopen(iio_path, "w");
     if (fdwrite == NULL)
         return false;
 
@@ -350,7 +354,7 @@ void RecallFastlockTune(int fastlock_profile_no)
 
 size_t PrepareSpan(uint64_t CenterFrequency, uint64_t SR, uint64_t span)
 {
-    SendiioCommand(sysfs_ad9361_phy,"adi,rx-fastlock-pincontrol-enable", "0");
+    SendiioCommand(sysfs_ad9361_phy,"adi,rx-fastlock-pincontrol-enable", "0",true);
 
    
 
@@ -561,7 +565,7 @@ void init_fft(uint16_t fft_size, uint16_t average)
 {
     m_fftsize = fft_size;
     m_average = average;
-    InitFSDevice();
+    
     // CivetWeb INIT
     mg_init_library(MG_FEATURES_WEBSOCKET);
     if (mg_check_feature(MG_FEATURES_WEBSOCKET) > 0)
@@ -593,4 +597,5 @@ void init_fft(uint16_t fft_size, uint16_t average)
         fprintf(stderr, "Init Neon10 with NEON\n");
     }
     PrepareFFT();
+    InitiioFSDevice();
 }
