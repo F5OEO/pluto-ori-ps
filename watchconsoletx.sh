@@ -44,7 +44,7 @@ loop()
 {
 while :
 do
-if [ "$whichdevice" = "ad9361-phy" ] ; then
+if [ "$adphys" = "ad9361-phy" ] ; then
 inotifywait -e modify /sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown
 txmute=$(cat /sys/bus/iio/devices/iio:device0/out_altvoltage1_TX_LO_powerdown)
 else

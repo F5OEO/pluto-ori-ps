@@ -1117,13 +1117,15 @@ bool HandleCommand(char *key, char *soriginvalue)
         if (strcmp(svalue, "?") != 0)
         {
             SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", svalue);
-            if (strcmp(svalue, "1")) // ptt off
+            if (strcmp(svalue, "1")==0) // ptt off
             {
+                fprintf(stderr,"mqtthandlecmd PTT OFF\n");
                 SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x26 0x10");
                 SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x27 0x00");
             }
             else // ptt on
             {
+                fprintf(stderr,"mqtthandlecmd PTT ON\n");
                 SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x26 0x10");
                 SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x27 0x50");
             }
