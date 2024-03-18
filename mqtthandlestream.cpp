@@ -72,6 +72,7 @@ enum iodev
 #define UDP_BUFF_MAX_SIZE (1472)
 //#define UDP_BUFF_MAX_BBFRAME (58192 / 8)
 #define UDP_BUFF_MAX_BBFRAME 8000
+//if we use the same queue in dvbs, max= 204*8 *4 = 6526. It is <8000
 char sCmdRoot[255];
 char sDtRoot[255];
 char m_addport[255];
@@ -175,7 +176,9 @@ enum
     tx_iq,
     tx_dvbs2_ts,
     tx_dvbs2_gse,
-    tx_test
+    tx_test,
+    tx_dvbs,
+    tx_dvbt
 
 };
 char s_txmode[255] = "pass";
@@ -274,36 +277,54 @@ void SwitchFirFilter(int NoFilter)
 
 #define switchsrc 0x43C00000
 #define switchdest 0x43C20000
-void SetFPGAMode(bool dvbs2)
+#define switchfir 0x43C50000 //C4 is already use bu vco of antsdr
+void SetFPGAMode(bool dvbs2,bool iq_fir)
 {
     usleep(100000); // Maybe the time I/Q samples don't go to dvbs2
     if (dvbs2)
     {
         WriteRegister(switchsrc + 0x40, 0x00);       // SI0->MI0
         WriteRegister(switchsrc + 0x44, 0x80000000); // MI1 unused
-        WriteRegister(switchsrc + 0x00, 0x02);
+        WriteRegister(switchsrc + 0x00, 0x02); //Apply register config
+
+        WriteRegister(switchfir + 0x40, 0x80000000); // 
+        WriteRegister(switchfir + 0x44, 0x01); // 
+        WriteRegister(switchfir + 0x00, 0x02); //Apply register config
 
         WriteRegister(switchdest + 0x40, 0x00); // SI0->MI0
         WriteRegister(switchdest + 0x00, 0x02);
     }
     else
     {
+        if(iq_fir) // IQ with FIR
+        {
         WriteRegister(switchsrc + 0x40, 0x80000000); // MI0 unused
         WriteRegister(switchsrc + 0x44, 0x0);        // SI0-> MI1
         WriteRegister(switchsrc + 0x00, 0x02);
 
-        WriteRegister(switchdest + 0x40, 0x01); // SI1->MI0
+        WriteRegister(switchfir + 0x40, 0x80000000); // 
+        WriteRegister(switchfir + 0x44, 0x00); // 
+        WriteRegister(switchfir + 0x00, 0x02); //Apply register config
+        
+        WriteRegister(switchdest + 0x40, 0x00); // SI1->MI0
         WriteRegister(switchdest + 0x00, 0x02);
+        }
+        else
+        {
+            WriteRegister(switchsrc + 0x40, 0x80000000); // MI0 unused
+            WriteRegister(switchsrc + 0x44, 0x0);        // SI0-> MI1
+            WriteRegister(switchsrc + 0x00, 0x02);
+
+            WriteRegister(switchfir + 0x40, 0x00); // 
+            WriteRegister(switchfir + 0x44, 0x80000000); // 
+            WriteRegister(switchfir + 0x00, 0x02); //Apply register config
+        
+            WriteRegister(switchdest + 0x40, 0x01); // SI1->MI0
+            WriteRegister(switchdest + 0x00, 0x02);
+
+        }
     }
 
-    /*
-        fprintf(stderr,"%x %x\n",switchsrc + 0x40,ReadRegister(switchsrc + 0x40));
-        fprintf(stderr,"%x %x\n",switchsrc + 0x44,ReadRegister(switchsrc + 0x44));
-        fprintf(stderr,"%x %x\n",switchsrc + 0x0,ReadRegister(switchsrc + 0x0));
-
-        fprintf(stderr,"%x %x\n",switchdest + 0x40,ReadRegister(switchdest + 0x40));
-        fprintf(stderr,"%x %x\n",switchdest + 0x0,ReadRegister(switchdest + 0x0));
-    */
 }
 
 // https://github.com/phase4ground/dvb_fpga/blob/master/third_party/airhdl/dvbs2_encoder_regs.md
@@ -1092,10 +1113,20 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate, uint Pilots)
     if (CodeRate == 0xFF)
         return;
 
+    if((m_txmode==tx_dvbs))
+    {
+           if(OldModCode!=CodeRate)
+           { 
+            setdvbsfec(CodeRate);
+            OldModCode=CodeRate;
+           }
+           return;
+    }
     unsigned char NewModCode = getdvbs2modcod(FrameType, Constellation, CodeRate, Pilots);
 
     if (NewModCode != OldModCode)
     {
+
         fprintf(stderr, "Frame %d Constellation %d CodeRate %d Pilots %d\n", FrameType, Constellation, CodeRate, Pilots);
         // write_byte_from_buffer_burst(NULL, 0, true);
         //  write_byte_from_buffer_split(NULL, 0, true); // Done prior because m_code is still used
@@ -1106,15 +1137,14 @@ void SetModCode(uint FrameType, uint Constellation, uint CodeRate, uint Pilots)
         // OldModCode = m_ModCode;
         OldModCode = NewModCode;
         fprintf(stderr, "Modcode = %x Coderate %d Len (bit) = %d Len (Byte) = %d \n", NewModCode, CodeRate, m_BBFrameLenBit, m_BBFrameLenBit / 8);
-
+        if((m_txmode==tx_dvbs2_ts)||(m_txmode==tx_dvbs2_gse))
         {
-            // int status = dvbs2neon_control(STREAM0, CONTROL_SET_OUTPUT_BUFFER, (uint32)BBFrameNeonBuff, 0); // CONTROL_SET_OUTPUT_BUFFER
-            //  fprintf(stderr, "Status %d \n", status);
-        }
-        setneonmodcod(Constellation, CodeRate, FrameType, Pilots,m_firfilter);
-        fprintf(stderr, "Efficiency %d NetBitrate = %f !\n", m_efficiency, float(m_SRtx * (m_efficiency / 4e6)));
-        // fprintf(stderr, "modocodgse  %d \n", (FrameType == 0 ? 0 : 11) + CodeRate);
-        setgsemodcod(Constellation, CodeRate, FrameType, Pilots);
+            setneonmodcod(Constellation, CodeRate, FrameType, Pilots,m_firfilter);
+            fprintf(stderr, "Efficiency %d NetBitrate = %f !\n", m_efficiency, float(m_SRtx * (m_efficiency / 4e6)));
+            // fprintf(stderr, "modocodgse  %d \n", (FrameType == 0 ? 0 : 11) + CodeRate);
+            setgsemodcod(Constellation, CodeRate, FrameType, Pilots);
+        }   
+        
         // fprintf(stderr, "Status dvbs2neon_control %d \n", status);
     }
 }
@@ -1235,6 +1265,58 @@ ssize_t write_bbframe()
     return sent;
 }
 
+ssize_t write_dvbsframe()
+{
+   
+    ssize_t sent = 0;
+    // Normal behavior
+
+    pthread_mutex_lock(&buffer_mutextx);
+    pthread_mutex_lock(&bufpluto_mutextx);
+    if (m_txbuf == NULL)
+    {
+        fprintf(stderr, "mode has changed \n");
+        pthread_mutex_unlock(&buffer_mutextx);
+        pthread_mutex_unlock(&bufpluto_mutextx);
+        return 0;
+    }
+    unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
+    buffer_t *newbuf = m_bbframe_queue.front();
+    ssize_t len = newbuf->size;
+    
+    memcpy(buffpluto , newbuf->bbframe, newbuf->size);
+    free(newbuf);
+    m_bbframe_queue.pop();
+    pthread_mutex_unlock(&buffer_mutextx);
+    
+    
+    if(iio_buffer_get_poll_fd(m_txbuf)<=0) 
+    {
+        fprintf(stderr,"Buffer issue\n");
+    }
+    sent = iio_buffer_push_partial(m_txbuf, len/4);
+    if(sent!=len)
+    {
+        char error[255];
+        iio_strerror(-sent,error,255);
+        fprintf(stderr,"iio buffer error %s \n",error);    
+    }
+    //fprintf(stderr,"iio buffer try %d , result %d\n",len,sent);
+    pthread_mutex_unlock(&bufpluto_mutextx);
+    // AGC TX Gain
+    
+    uint32_t val = 0;
+    int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
+    if (val & 1)
+    {
+        fprintf(stderr, "@");
+        fflush(stderr);
+        iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
+    }
+
+    return sent;
+}
+
 bool IsPhysicalUp(char *if_name)
 {
     bool Isup = false;
@@ -1289,7 +1371,7 @@ void SetTxMode(int Mode)
     case tx_passtrough:
     {
         inittxok=InitTxChannel(0, 0);
-        SetFPGAMode(false);
+        SetFPGAMode(false,false);
     }
     break;
     case tx_iq:
@@ -1298,7 +1380,7 @@ void SetTxMode(int Mode)
         int LatencyMicro = 200000; // 200 ms buffer
         BufferLentx = LatencyMicro * (m_SRtx / 1e6);
         inittxok=InitTxChannel(BufferLentx, 4);
-        SetFPGAMode(false);
+        SetFPGAMode(false,false);
     }
     break;
     case tx_dvbs2_ts:
@@ -1312,7 +1394,7 @@ void SetTxMode(int Mode)
         // InitTxChannel(BufferLentx,debugbuffer);
         debugbuffer *= 2;
 
-        SetFPGAMode(true);
+        SetFPGAMode(true,true);
         ResetDVBS2();
         SetDVBS2Constellation();
     }
@@ -1322,9 +1404,18 @@ void SetTxMode(int Mode)
         BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
 
         inittxok= InitTxChannel(BufferLentx, 2);
-        SetFPGAMode(true);
+        SetFPGAMode(true,true);
         ResetDVBS2();
         SetDVBS2Constellation();
+    }
+    break;
+     case tx_dvbs:
+    {
+        BufferLentx = 204*4*8; // 204 * 8 is a FRAME in DVB-S but should be less
+
+        inittxok= InitTxChannel(BufferLentx, 8);
+        SetFPGAMode(false,true);
+           
     }
     break;
     }
@@ -1452,7 +1543,32 @@ void *tx_buffer_thread(void *arg)
                 write_from_buffer(Tone, BufferLentx);
             };
             break;
+            case tx_dvbs:
+            {
+                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate, m_Pilots);
+                if (!m_bbframe_queue.empty())
+                {
+                    
+                    if(write_dvbsframe()<=0)
+                    {
+                        fprintf(stderr,"dvbsframe issue\n");
+                        //An issue , surely someone else is trying to get the buffer
+                        SetTxMode(tx_passtrough);
+                    };
+                }
+                else // No more data : need padding
+                {
+
+                    if (m_txmode == tx_dvbs)
+                        setpaddingts();
+                   
+                
+                }   
             }
+            break;
+            }
+            
+            
         }
         else
         {
@@ -1535,7 +1651,8 @@ bool SendCommand(char *skey, char *svalue)
 char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx/stream/output_type", "rx/stream/burst","rx/stream/mode","rx/stream/average","rx/webfft/frequency","rx/webfft/span",
                       "tx/stream/run", "tx/stream/mode" ,
                       "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable","tx/dvbs2/sdt",
-                      "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile", "tx/gain","tx/dvbs2/digitalgain","tx/dvbs2/firfilter", ""};
+                      "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile","tx/dvbs2/tssourcefilebitrate",
+                      "tx/gain","tx/dvbs2/digitalgain","tx/dvbs2/firfilter", ""};
 enum defidx
 {
     listcmd,
@@ -1562,6 +1679,7 @@ enum defidx
     cmd_txdvbs2tsourcemode,
     cmd_txdvbs2tsourceip,
     cmd_txdvbs2tsourcefile,
+    cmd_txdvbs2tsourcefilebitrate,
     cmd_txgain,
     cmd_txdigitalgain,
     cmd_txfirfilter
@@ -1616,6 +1734,17 @@ void PubTelemetry()
         }
         m_MaxBBFrameByte = 0;
         m_UsedBBFrameByte = 0;
+    }
+    if (m_txmode == tx_dvbs)
+    {
+        publish("tx/dvbs/ts/bitrate", float(m_SRtx * (m_efficiency / (float)4e6)));
+        
+        extern size_t Lastpidccerror;
+        if(Lastpidccerror!=8192)
+        {
+            publish("tx/dvbs/ts/ccerror",Lastpidccerror);
+            Lastpidccerror=8192;
+        }
     }
 
     /*
@@ -1850,6 +1979,7 @@ bool HandleCommand(char *key, char *svalue)
                 case tx_passtrough : strcpy(s_txmode,"pass");break;
                 case tx_dvbs2_ts : strcpy(s_txmode,"dvbs2-ts");break;
                 case tx_dvbs2_gse : strcpy(s_txmode,"dvbs2-gse");break;
+                case tx_dvbs : strcpy(s_txmode,"dvbs");break;
             }
             publish("tx/stream/mode", s_txmode);
 
@@ -1903,6 +2033,17 @@ bool HandleCommand(char *key, char *svalue)
             {
 
                 SetTxMode(tx_dvbs2_gse);
+                strcpy(s_txmode, svalue);
+                publish("tx/stream/mode", s_txmode);
+            }
+            break;
+        }
+        if ((strcmp(svalue, "dvbs") == 0))
+        {
+            if (m_txmode != tx_dvbs)
+            {
+
+                SetTxMode(tx_dvbs);
                 strcpy(s_txmode, svalue);
                 publish("tx/stream/mode", s_txmode);
             }
@@ -2168,7 +2309,7 @@ bool HandleCommand(char *key, char *svalue)
             publish("tx/dvbs2/tssourcemode",(float) m_tssource);
             break;
         }
-        settssource(atoi(svalue), NULL);
+        settssource(atoi(svalue), NULL,0);
         publish("tx/dvbs2/tssourcemode",(float) m_tssource);
         break;
     }
@@ -2183,7 +2324,7 @@ bool HandleCommand(char *key, char *svalue)
         }
         if(m_tssource==0)
         {
-            settssource(-1,svalue);
+            settssource(-1,svalue,0);
             publish("tx/dvbs2/tssourceaddress", m_mcast_ts);
         }    
         break;
@@ -2199,8 +2340,25 @@ bool HandleCommand(char *key, char *svalue)
         }
         if(m_tssource==1)
         {
-            settssource(-1,svalue);
+            settssource(-1,svalue,0);
             publish("tx/dvbs2/tssourcefile", m_ts_filename);
+        }    
+        break;
+    }
+
+    case cmd_txdvbs2tsourcefilebitrate:
+    {
+        if (strcmp(svalue, "?") == 0)
+        {
+
+            publish("tx/dvbs2/tssourcefilebitrate", m_ts_filebitrate);
+            break;
+        }
+        if(m_tssource==1)
+        {   
+            m_ts_filebitrate=atoi(svalue);
+            settssource(-1,NULL,m_ts_filebitrate);
+            publish("tx/dvbs2/tssourcefilebitrate", m_ts_filebitrate);
         }    
         break;
     }

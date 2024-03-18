@@ -20,6 +20,13 @@ htonl() */
 #include <queue>
 #include "ts_util/pcrpts.h"
 #include "./dvbs2neon/dvbs2neon.h"
+#include "./dvbsarm/fec100.h"
+
+extern "C"
+{
+    extern void dvbsenco_init(void);
+    extern uchar *dvbsenco(uchar *);
+}
 
 using namespace std;
 #define WITH_NEON
@@ -106,7 +113,10 @@ enum
     tx_passtrough,
     tx_iq,
     tx_dvbs2_ts,
-    tx_dvbs2_gse
+    tx_dvbs2_gse,
+    tx_test,
+    tx_dvbs,
+    tx_dvbt
 
 };
 
@@ -114,14 +124,15 @@ int m_tssource = tssource_udp;
 char m_mcast_ts[255];
 char m_mcast_iface[255];
 char m_ts_filename[255];
+uint m_ts_filebitrate = 10000;
 FILE *fdtsinput = NULL;
 int m_FileBitrate = 100000;
 int m_LatencySevenPacket = 1000;
-size_t Lastpidccerror=8192;
+size_t Lastpidccerror = 8192;
 
 bool addbbframe(uint8_t *bbframe, size_t len, size_t modcod)
 {
-    if (m_txmode != tx_dvbs2_ts)
+    if ((m_txmode != tx_dvbs2_ts)&&(m_txmode != tx_dvbs))
         return false;
     pthread_mutex_lock(&buffer_mutextx);
     buffer_t *newbuf = (buffer_t *)malloc(sizeof(buffer_t));
@@ -161,6 +172,7 @@ bool addbbframe(uint8_t *bbframe, size_t len, size_t modcod)
         int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
     }
     */
+   //fprintf(stderr,"Add bbframe of %d\n",newbuf->size);
     m_bbframe_queue.push(newbuf);
     pthread_mutex_unlock(&buffer_mutextx);
     return true;
@@ -335,32 +347,31 @@ void addneonts(uint8_t *tspacket, size_t length)
             fprintf(stderr, "Ts input error aligned %x\n", cur_packet[0]);
             return;
         }
-        if ((m_Fecmode == fec_variable) && GetPid((char*)cur_packet)==0x1FFF) // Remove TS padding
+        if ((m_Fecmode == fec_variable) && GetPid((char *)cur_packet) == 0x1FFF) // Remove TS padding
         {
             cur_packet += 188;
-             
+
             continue;
             // Nothing to add
         }
-        ProcessCorectPCR(cur_packet,188); // Correct PCR
+        ProcessCorectPCR(cur_packet, 188); // Correct PCR
 
-        if (GetPid((char*)cur_packet) == 0x11) // replace sdt
+        if (GetPid((char *)cur_packet) == 0x11) // replace sdt
         {
-            bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customsdt), 0);
+            bbframeptr = (unsigned short *)dvbs2neon_packet(0, (uint32)(customsdt), 0);
             update_cont_counter(customsdt);
         }
-        else
-        if(GetPid((char*)cur_packet) == 0x1FFF)
+        else if (GetPid((char *)cur_packet) == 0x1FFF)
         {
-            bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customnullpacket), 0);
-             
+            bbframeptr = (unsigned short *)dvbs2neon_packet(0, (uint32)(customnullpacket), 0);
         }
         else
         {
-            size_t piderror=InspectCC(cur_packet,188);
-            if(piderror!=8192) Lastpidccerror=piderror;
-            bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(cur_packet), 0);
-        } 
+            size_t piderror = InspectCC(cur_packet, 188);
+            if (piderror != 8192)
+                Lastpidccerror = piderror;
+            bbframeptr = (unsigned short *)dvbs2neon_packet(0, (uint32)(cur_packet), 0);
+        }
         cur_packet += 188;
         if (bbframeptr != NULL)
         {
@@ -399,9 +410,9 @@ void addneonts(uint8_t *tspacket, size_t length)
             {
                 tempmodecode = fmt;
                 int fecoffset = (m_bbframe_queue.size() / 2);
-                if(fecoffset>m_FecRange)
+                if (fecoffset > m_FecRange)
                 {
-                    fecoffset=m_FecRange;
+                    fecoffset = m_FecRange;
                 }
 
                 if (fecoffset + tempmodecode.fec > 10)
@@ -432,6 +443,88 @@ void addneonts(uint8_t *tspacket, size_t length)
               */
             // pthread_mutex_unlock(&buffer_mutexts);
         }
+    }
+}
+
+void adddvbsframe(uint8_t *tspacket)
+{
+    static unsigned char Buff[208];
+    static unsigned char *pRS204;
+    static unsigned char packedSymbol[408]; // 204*2bits/symbol /8 (byte)
+    static unsigned char symbols[408 * 4];  // 204*2bits/symbol  (byte)
+    static uint16_t Frame[408*4*2];
+    uint16 NbIQOutput;
+    uint16 NbSymbolsTotal = 0;
+    uint16_t *FrameCurrentSymbol=Frame;
+    uint16_t magnitude=0x7FFF/sqrt(2);
+    memcpy(Buff, tspacket, 188);
+
+    pRS204 = dvbsenco(Buff);
+    NbIQOutput = viterbi(pRS204, packedSymbol);
+    //fprintf(stderr,"viterbi out %d\n",NbIQOutput);
+    for (int k = 0; k < NbIQOutput; k++)
+    {
+        for (int j = 0; j < 4; j++)
+        {
+            //symbols[k * 4 + j] = (packedSymbol[k] >> (6 - j * 2)) & 0x3;
+            switch((packedSymbol[k] >> (6 - j * 2)) & 0x3)
+            {
+                case 0: *FrameCurrentSymbol++=magnitude;*FrameCurrentSymbol++=magnitude;break;
+                case 1: *FrameCurrentSymbol++=magnitude;*FrameCurrentSymbol++=-magnitude;break;
+                case 2: *FrameCurrentSymbol++=-magnitude;*FrameCurrentSymbol++=magnitude;break;
+                case 3: *FrameCurrentSymbol++=-magnitude;*FrameCurrentSymbol++=-magnitude;break;
+            }
+            NbSymbolsTotal++;
+            //fprintf(stderr,"Symbol %d -> %d",(packedSymbol[k] >> (6 - j * 2)) & 0x3,*(FrameCurrentSymbol-1));
+        }
+    }
+    //fprintf(stderr,"Nb IQ %d\n",NbSymbolsTotal);
+    addbbframe((uint8_t *)Frame,NbSymbolsTotal*4,0); //IQ = 4 bytes
+}
+
+void adddvbsts(uint8_t *tspacket, size_t length)
+{
+
+       uint8_t *cur_packet = tspacket;
+
+    if (length % 188 != 0)
+    {
+        fprintf(stderr, "Ts input error len %d\n", length);
+        return;
+    }
+    for (int i = 0; i < length / 188; i++)
+    {
+        // pthread_mutex_lock(&buffer_mutexts);
+        if (cur_packet[0] != 0x47)
+        {
+            fprintf(stderr, "Ts input error aligned %x\n", cur_packet[0]);
+            return;
+        }
+       
+        ProcessCorectPCR(cur_packet, 188); // Correct PCR
+
+        if (GetPid((char *)cur_packet) == 0x11) // replace sdt
+        {
+            // bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customsdt), 0);
+            adddvbsframe(customsdt);
+           
+            update_cont_counter(customsdt);
+        }
+        else if (GetPid((char *)cur_packet) == 0x1FFF)
+        {
+            adddvbsframe(customnullpacket);
+            // bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customnullpacket), 0);
+        }
+        else
+        {
+            size_t piderror = InspectCC(cur_packet, 188);
+            if (piderror != 8192)
+                Lastpidccerror = piderror;
+            adddvbsframe(cur_packet);
+            // bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(cur_packet), 0);
+        }
+        cur_packet += 188;
+       
     }
 }
 
@@ -653,10 +746,10 @@ void *rx_ts_thread(void *arg)
                 fseek(fdtsinput, 0, SEEK_SET);
                 // correctcc(tspacket,true);
             }
-            if (m_bbframe_queue.size() < 50)
+            if (m_bbframe_queue.size() < 10)
             {
                 length = fread(tspacket, 1, 7 * 188, fdtsinput);
-                usleep(m_LatencySevenPacket * 1000);
+                // usleep(m_LatencySevenPacket * 1000);
             }
             else
             {
@@ -678,18 +771,21 @@ void *rx_ts_thread(void *arg)
         if (length > 0)
         {
             pthread_mutex_lock(&buffer_mutexts);
-#ifdef WITH_NEON
-            addneonts(tspacket, length);
-#else
-            addts(tspacket, length);
-#endif
-
+            if (m_txmode == tx_dvbs2_ts)
+            {
+                addneonts(tspacket, length);
+            }
+            if (m_txmode == tx_dvbs)
+            {
+                
+                adddvbsts(tspacket, length);
+            }
             pthread_mutex_unlock(&buffer_mutexts);
         }
     }
 }
 
-void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilots,int filter)
+void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilots, int filter)
 {
 
     switch (Constellation)
@@ -716,11 +812,10 @@ void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilot
         fmt.pilots = PILOTS_ON;
     else
         fmt.pilots = PILOTS_OFF;
-    if(filter==0)    
+    if (filter == 0)
         fmt.roll_off = RO_0_20;
-     if(filter==1)    
+    if (filter == 1)
         fmt.roll_off = RO_0_15;
-        
 
     // FixMe : Modcod should be changed ONLY when a bbframe is complete or at startup
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
@@ -731,11 +826,30 @@ void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilot
     // pthread_mutex_unlock(&buffer_mutexts);
 }
 
-void settsmodcode()
+void setdvbsfec(uint CodeRate)
 {
+    switch(CodeRate) //Retrict fec allowed in dvbs
+    {
+        case C1_4:
+        case C1_3:
+        case C2_5:
+        case C1_2: CodeRate=1; m_efficiency=(1e6*188)/(2*204);break;
+
+    case C3_5:
+    case C2_3: CodeRate=2;m_efficiency=(1e6*188*2)/(3*204);break;
+    case C3_4 : CodeRate=3;m_efficiency=(1e6*188*3)/(4*204);break;
+    case C4_5 : 
+    case C5_6 :CodeRate=5;m_efficiency=(1e6*188*5)/(6*204);break;
+    case C8_9 :
+    case C9_10 : CodeRate=7;m_efficiency=(1e6*188*7)/(8*204);break;
+    }
+    fprintf(stderr,"DVBS FEC %d\n",CodeRate);
+    dvbsenco_init();
+    viterbi_init(CodeRate); // 1/2
+    
 }
 
-void settssource(int tssource, char *arg)
+void settssource(int tssource, char *arg, uint tsbitrate)
 {
     if (tssource != -1)
     {
@@ -756,16 +870,23 @@ void settssource(int tssource, char *arg)
     break;
     case tssource_file:
     {
-        if (arg == NULL)
-            break;
-        strcpy(m_ts_filename, arg);
-        if (fdtsinput != NULL)
-            fclose(fdtsinput);
-        fdtsinput = fopen(m_ts_filename, "rb");
-        m_FileBitrate = GetTsBitrate();
-
-        m_LatencySevenPacket = (1000 * 7 * 188 * 8L) / (long)m_FileBitrate;
-        fprintf(stderr, "File bitrate = %d Latency us %d\n", m_FileBitrate, m_LatencySevenPacket * 1000);
+        if (arg != NULL)
+        {
+            fprintf(stderr, "Setting file ts %s\n", arg);
+            strcpy(m_ts_filename, arg);
+            if (fdtsinput != NULL)
+                fclose(fdtsinput);
+            fdtsinput = fopen(m_ts_filename, "rb");
+            m_FileBitrate = GetTsBitrate();
+            m_LatencySevenPacket = (1000 * 7 * 188 * 8L) / (long)m_FileBitrate;
+            fprintf(stderr, "File bitrate = %d Latency us %d\n", m_FileBitrate, m_LatencySevenPacket * 1000);
+        }
+        if (tsbitrate > 0)
+        {
+            fprintf(stderr, "Setting file ts bitrate %d\n", tsbitrate);
+            m_FileBitrate = tsbitrate;
+            m_LatencySevenPacket = (1000 * 7 * 188 * 8L) / (long)m_FileBitrate;
+        }
     }
     break;
     case tssource_pattern:
@@ -797,11 +918,12 @@ void setpaddingts()
     }
     pthread_mutex_lock(&buffer_mutexts);
 
-#ifdef WITH_NEON
-    addneonts(NullPacket, /*7 **/ 188);
-#else
-    addts(NullPacket, 7 * 188);
-#endif
+    if(m_txmode == tx_dvbs2_ts)
+        addneonts(NullPacket, /*7 **/ 188);
+    if(m_txmode == tx_dvbs ) 
+    {
+        adddvbsts(NullPacket,188);
+    }
     pthread_mutex_unlock(&buffer_mutexts);
 }
 
@@ -816,50 +938,46 @@ void updatesdt(char *custom)
     pclose(cmd);
     char sdt[512] = {0x0};
 
-    if(custom)
+    if (custom)
     {
-        sprintf(sdt,"%s%s",custom,result);
+        sprintf(sdt, "%s%s", custom, result);
     }
     else
     {
-        sprintf(sdt,"%s",result);
+        sprintf(sdt, "%s", result);
     }
 
-    //fprintf(stderr,"SDT %s\n",sdt);
+    // fprintf(stderr,"SDT %s\n",sdt);
     char provider[255] = {0x0};
     sprintf(provider, "PlutoDVB2-%s(F5OEO)", COMIT_FW);
-    int sum=0;
-    for(int i=0;i<10;i++)
+    int sum = 0;
+    for (int i = 0; i < 10; i++)
     {
-        sum+=provider[i];    
+        sum += provider[i];
     }
-    if(sum!=0x34F)
+    if (sum != 0x34F)
     {
         exit(1);
     }
     // fprintf(stderr,provider);
     customsdt = sdt_fmt(1, 1, 1, provider, sdt);
 
-    char *byte=(char *)&customnullpacket[0];
-    *byte++=0x47;*byte++=0x1F;*byte++=0xFF;*byte++=0x10;
-    strcpy(byte,provider);
-    byte+=strlen(provider);
+    char *byte = (char *)&customnullpacket[0];
+    *byte++ = 0x47;
+    *byte++ = 0x1F;
+    *byte++ = 0xFF;
+    *byte++ = 0x10;
+    strcpy(byte, provider);
+    byte += strlen(provider);
     char squeue[50];
-    sprintf(squeue,"Queue:%d",m_bbframe_queue.size()); // Fixme ; this should be update regularly not only at start
-    strcpy(byte,squeue);
-    byte+=strlen(squeue);
+    sprintf(squeue, "Queue:%d", m_bbframe_queue.size()); // Fixme ; this should be update regularly not only at start
+    strcpy(byte, squeue);
+    byte += strlen(squeue);
     sprintf(provider, "Comit:%s", COMIT_FW);
-    strcpy(byte,provider);
-    byte+=strlen(provider);
-    *byte++=0xFF;
-    
-
-
-
-
-
+    strcpy(byte, provider);
+    byte += strlen(provider);
+    *byte++ = 0xFF;
 }
-
 
 #ifndef COMIT_FW
 #define COMIT_FW "OUT_OF_TREE"
@@ -869,14 +987,21 @@ void init_tsmux(char *mcast_ts, char *mcast_iface)
 {
 
     updatesdt("");
+    // DVBS2 INIT
     int status1 = dvbs2neon_control(0, CONTROL_RESET_FULL, (uint32)symbolbuff, sizeof(symbolbuff));
     int status2 = dvbs2neon_control(STREAM0, CONTROL_RESET_STREAM, 0, DATAMODE_TS);
     fmt.fec = 0;
     fmt.frame_type = FRAME_NORMAL;
-    fmt.output_format = OUTPUT_FORMAT_BBFRAME; // OUTPUT_FORMAT_BBFRAME is segfault
+    fmt.output_format = OUTPUT_FORMAT_BBFRAME;
     fmt.pilots = PILOTS_OFF;
     fmt.roll_off = RO_0_20;
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
+
+    // DVBS INIT
+    dvbsenco_init();
+    viterbi_init(1); // 1/2
+
+    // Other inits
     strcpy(m_mcast_ts, mcast_ts);
     strcpy(m_mcast_iface, mcast_iface);
 
