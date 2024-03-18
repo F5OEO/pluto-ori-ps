@@ -276,8 +276,8 @@ void SwitchFirFilter(int NoFilter)
 }
 
 #define switchsrc 0x43C00000
-#define switchdest 0x43C20000
-#define switchfir 0x43C50000 //C4 is already use bu vco of antsdr
+#define switchdest 0x43C01000
+#define switchfir 0x43C02000 //C4 is already use bu vco of antsdr
 void SetFPGAMode(bool dvbs2,bool iq_fir)
 {
     usleep(100000); // Maybe the time I/Q samples don't go to dvbs2
