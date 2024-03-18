@@ -420,7 +420,7 @@ uint64_t GetPcrTime(uint64_t PCR)
 		
 		PCRReference=PCR;
 		ClockTimeReference=ClockTime;
-		fprintf(stderr,"clktimereference = %lld pcrref %lld\n",ClockTimeReference,PCRReference);
+		//fprintf(stderr,"clktimereference = %lld pcrref %lld\n",ClockTimeReference,PCRReference);
 	}
 	OldPCR=PCR;
 	//fprintf(stderr,"pcrtime %lld\n",PCR-PCRReference+ClockTimeReference*27000LL);
