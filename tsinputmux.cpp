@@ -833,15 +833,15 @@ void setdvbsfec(uint CodeRate)
         case C1_4:
         case C1_3:
         case C2_5:
-        case C1_2: CodeRate=1; m_efficiency=(1e6*188)/(2*204);break;
+        case C1_2: CodeRate=1; m_efficiency=(1e6*188*2)/(2*204);break;
 
     case C3_5:
-    case C2_3: CodeRate=2;m_efficiency=(1e6*188*2)/(3*204);break;
-    case C3_4 : CodeRate=3;m_efficiency=(1e6*188*3)/(4*204);break;
+    case C2_3: CodeRate=2;m_efficiency=(1e6*188*2*2)/(3*204);break;
+    case C3_4 : CodeRate=3;m_efficiency=(1e6*188*3*2)/(4*204);break;
     case C4_5 : 
-    case C5_6 :CodeRate=5;m_efficiency=(1e6*188*5)/(6*204);break;
+    case C5_6 :CodeRate=5;m_efficiency=(1e6*188*5*2)/(6*204);break;
     case C8_9 :
-    case C9_10 : CodeRate=7;m_efficiency=(1e6*188*7)/(8*204);break;
+    case C9_10 : CodeRate=7;m_efficiency=(1e6*188*7*2)/(8*204);break;
     }
     fprintf(stderr,"DVBS FEC %d\n",CodeRate);
     dvbsenco_init();
