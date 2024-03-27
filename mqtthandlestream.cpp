@@ -72,6 +72,7 @@ enum iodev
 #define UDP_BUFF_MAX_SIZE (1472)
 //#define UDP_BUFF_MAX_BBFRAME (58192 / 8)
 #define UDP_BUFF_MAX_BBFRAME 8000
+#define DVBS_MAX_NB_BUFFER 100
 //if we use the same queue in dvbs, max= 204*8 *4 = 6526. It is <8000
 char sCmdRoot[255];
 char sDtRoot[255];
@@ -1281,14 +1282,26 @@ ssize_t write_dvbsframe()
         return 0;
     }
     unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
+    ssize_t len=0;
+     unsigned char *cur_buff=buffpluto;
+    //for(int i=0;i<(m_bbframe_queue.size())&&(i<DVBS_MAX_NB_BUFFER);i++) 
+    {
     buffer_t *newbuf = m_bbframe_queue.front();
-    ssize_t len = newbuf->size;
+    len += newbuf->size;
     
-    memcpy(buffpluto , newbuf->bbframe, newbuf->size);
+    memcpy(cur_buff , newbuf->bbframe, newbuf->size);
+    cur_buff+=newbuf->size;
     free(newbuf);
     m_bbframe_queue.pop();
+    
+    }
     pthread_mutex_unlock(&buffer_mutextx);
     
+    if(len==0)
+    {
+         pthread_mutex_unlock(&bufpluto_mutextx);
+         return 0;
+    }
     
     if(iio_buffer_get_poll_fd(m_txbuf)<=0) 
     {
@@ -1411,7 +1424,7 @@ void SetTxMode(int Mode)
     break;
      case tx_dvbs:
     {
-        BufferLentx = 204*4*8; // 204 * 8 is a FRAME in DVB-S but should be less
+        BufferLentx = 204*4*8*DVBS_MAX_NB_BUFFER; // 204 * 8 is a FRAME in DVB-S but should be less
 
         inittxok= InitTxChannel(BufferLentx, 8);
         SetFPGAMode(false,true);
@@ -1548,19 +1561,27 @@ void *tx_buffer_thread(void *arg)
                 SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate, m_Pilots);
                 if (!m_bbframe_queue.empty())
                 {
-                    
-                    if(write_dvbsframe()<=0)
+                    ssize_t sent=0;
+                    if((sent=write_dvbsframe())<0)
                     {
                         fprintf(stderr,"dvbsframe issue\n");
                         //An issue , surely someone else is trying to get the buffer
                         SetTxMode(tx_passtrough);
-                    };
+                    }
+                    else
+                    {
+                        //fprintf(stderr,"Sent %d\n",sent);
+                    }
                 }
                 else // No more data : need padding
                 {
 
                     if (m_txmode == tx_dvbs)
-                        setpaddingts();
+                    {
+                        for(int i=0;i<10;i++)
+                        //while(m_bbframe_queue.size()<3)
+                            setpaddingts();
+                    }    
                    
                 
                 }   
