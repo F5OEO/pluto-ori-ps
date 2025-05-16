@@ -8,14 +8,14 @@
 #PAPR_ORI=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/root
 #PAPR_WWW=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/pluto-buildroot/board/pluto/overlay/www
 
-#CROSS_COMPILE = arm-none-linux-gnueabihf-
-#SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/f5oeo38plutosdr-fw/buildroot/output/staging
-#TOOLS_PATH = PATH="/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/f5oeo38plutosdr-fw/buildroot/output/host/bin:/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/f5oeo38plutosdr-fw/buildroot/output/host/sbin:$(PATH)"
+CROSS_COMPILE = arm-none-linux-gnueabihf-
+SYSROOT=/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/f5oeo38plutosdr-fw/buildroot/output/staging
+TOOLS_PATH = PATH="/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/f5oeo38plutosdr-fw/buildroot/output/host/bin:/home/linuxdev/prog/pluto/pluto-ori/pluto-ori-frm/f5oeo38plutosdr-fw/buildroot/output/host/sbin:$(PATH)"
 
 CXX=$(CROSS_COMPILE)g++
 CC=$(CROSS_COMPILE)gcc
 #HOST_DIR=/home/linuxdev/prog/pluto/firm033/pluto_radar/plutosdr-fw/buildroot/output/host
-FLAGS = -O2 -fpermissive -Wall -Wno-write-strings -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-pointer-arith -Wno-format-zero-length -Wno-sign-compare -liio -mfpu=neon -mfloat-abi=hard
+FLAGS = -O2 -Wa,--noexecstack -Wl,-z,noexecstack -fpermissive -Wall -Wno-write-strings -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-pointer-arith -Wno-format-zero-length -Wno-sign-compare -liio -mfpu=neon -mfloat-abi=hard
 
 INC=-I./include_gse/gse
 VER ?= $(shell cd $(CURDIR) && git describe --tags)
