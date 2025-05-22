@@ -1117,6 +1117,8 @@ bool HandleCommand(char *key, char *soriginvalue)
         if (strcmp(svalue, "?") != 0)
         {
             SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", svalue);
+            // Removed because watchconsoletx is running in parallel and disturb LNB
+            /*
             if (strcmp(svalue, "1")==0) // ptt off
             {
                 fprintf(stderr,"mqtthandlecmd PTT OFF\n");
@@ -1129,6 +1131,7 @@ bool HandleCommand(char *key, char *soriginvalue)
                 SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x26 0x10");
                 SendDebugCommand(sysfs_ad9361_phy,"direct_reg_access", "0x27 0x50");
             }
+            */
         }
         publishstatus(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", key);
         break;
