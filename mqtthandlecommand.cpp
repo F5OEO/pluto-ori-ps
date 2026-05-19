@@ -1154,6 +1154,7 @@ bool HandleCommand(char *key, char *soriginvalue)
         break;
     }
     //FixMe : Remove for now , until include oscimp lib
+    /*
     case cmd_txnco:
     {
         
@@ -1174,6 +1175,7 @@ bool HandleCommand(char *key, char *soriginvalue)
 
         break;
     }
+        */
     }
 
     return true;
