@@ -589,7 +589,7 @@ bool ComputeTxSR(char *svalue)
         // publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "tx/sr");
         return true; // This is a request status
     }
-#define FPGA_INTERPOL (8.0)
+#define FPGA_INTERPOL (1.0)
     float MinDAC = 25e6 / 12;
     float MaxDAC = 61.4e6;
     float fpgainterpol = FPGA_INTERPOL; // FPGA INTERPOL
