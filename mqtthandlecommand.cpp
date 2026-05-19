@@ -749,7 +749,7 @@ bool ComputeTxSRDVBS2(char *svalue)
         // publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "tx/sr");
         return true; // This is a request status
     }
-#define FPGA_INTERPOL (8.0)
+
 #define FPGA_DVBS2 4
     float MinDAC = 25e6 / 12;
     float MaxDAC = 61.4e6;
