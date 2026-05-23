@@ -1,0 +1,37 @@
+#!/bin/sh
+
+start() {
+/usr/bin/pluto_mqtt_ctrl </dev/null 2>/dev/null &
+/usr/bin/pluto_stream </dev/null 2>/dev/null &
+
+}
+
+stop() {
+
+	echo "Stopping"
+}
+
+restart() {
+	stop
+	start
+}
+
+# start/stop/restart
+case "$1" in
+  start)
+	start
+	;;
+  stop)
+	stop
+	;;
+  restart)
+	restart
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?
+
+
