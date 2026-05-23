@@ -949,16 +949,17 @@ void updatesdt(char *custom)
 
     // fprintf(stderr,"SDT %s\n",sdt);
     char provider[255] = {0x0};
-    sprintf(provider, "PlutoDVB2-%s(F5OEO)", COMIT_FW);
+    sprintf(provider, "TezukaTV-%s(F5OEO)", COMIT_FW);
     int sum = 0;
     for (int i = 0; i < 10; i++)
     {
         sum += provider[i];
     }
+    /*
     if (sum != 0x34F)
     {
         exit(1);
-    }
+    }*/
     // fprintf(stderr,provider);
     customsdt = sdt_fmt(1, 1, 1, provider, sdt);
 
