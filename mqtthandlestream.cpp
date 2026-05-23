@@ -1174,36 +1174,19 @@ ssize_t write_bbframe()
     buffer_t *newbuf = m_bbframe_queue.front();
     ssize_t len = newbuf->size;
     unsigned int IdxStart = LazyLut[(len + 2) % 8];
-
+    unsigned int IdxStart2 = (8-(len + 2) % 8)%8;
     memset(buffpluto, 0, 2); // Idx = len -1
 
     // buffpluto[0] = newbuf->modecod;
     buffpluto[0] = 0xB8;
     buffpluto[1] = newbuf->modecod;
-    /*
-   if(newbuf->modecod>=longframe)
-   {
-       buffpluto[1]=(newbuf->modecod-longframe+1);
-       buffpluto[1]|=0<<5; // No pilots
-       buffpluto[1]|=0<<6; // Longframe
-   }
-   else
-   {
-       buffpluto[1]=(newbuf->modecod+1);
-       buffpluto[1]|=1<<5; // No pilots
-       buffpluto[1]|=1<<6; // SHortframe
-   }*/
-
+    
     // fprintf(stderr,"Warning : fec %d short = %d\n",buffpluto[1]&0x1F,buffpluto[1]>>5);
     memcpy(buffpluto + 2, newbuf->bbframe, newbuf->size);
     free(newbuf);
     m_bbframe_queue.pop();
     pthread_mutex_unlock(&buffer_mutextx);
-    if (BBFrameLenLut[buffpluto[1]] / 8 != len)
-    {
-        // fprintf(stderr,"Warning : modcod %x bbfram len %d len %d\n",buffpluto[0],BBFrameLenLut[buffpluto[0]-0x2c+11]/8,len);
-        // return 0;
-    }
+    
     if ((len + 2 + IdxStart + 1) % 8 != 0)
         fprintf(stderr, "len %d is not mod 8\n", len + 2 + IdxStart + 1);
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -1245,7 +1228,7 @@ ssize_t write_bbframe()
     {
         fprintf(stderr,"Buffer issue\n");
     }
-    sent = iio_buffer_push_partial(m_txbuf, (len + 2 + IdxStart + 1) / 4);
+    sent = iio_buffer_push_partial(m_txbuf, (len + 2 + IdxStart2 ) / 4);
     pthread_mutex_unlock(&bufpluto_mutextx);
     // AGC TX Gain
 
@@ -1399,7 +1382,7 @@ void SetTxMode(int Mode)
     case tx_dvbs2_ts:
     {
         static int debugbuffer = 2;
-        BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
+        BufferLentx = ((58192 / 8) + 8) * 20; // MAX BBFRAME LENGTH aligned 8
         // Should be calculated from mm_srtx
         int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;
 
@@ -1673,7 +1656,7 @@ char strcmd[][255] = {"listcmd", "rx/stream/run", "rx/stream/udp_addr_port", "rx
                       "tx/stream/run", "tx/stream/mode" ,
                       "tx/dvbs2/fec", "tx/dvbs2/constel", "tx/dvbs2/frame", "tx/dvbs2/pilots", "tx/dvbs2/sr", "tx/dvbs2/gainvariable","tx/dvbs2/sdt",
                       "tx/dvbs2/fecmode", "tx/dvbs2/fecrange","tx/dvbs2/rxbbframeip", "tx/dvbs2/tssourcemode", "tx/dvbs2/tssourceaddress", "tx/dvbs2/tssourcefile","tx/dvbs2/tssourcefilebitrate",
-                      "tx/gain","tx/dvbs2/digitalgain","tx/dvbs2/firfilter", ""};
+                      "tx/gain","tx/dvbs2/digitalgain","tx/dvbs2/firfilter","tx/mute", ""};
 enum defidx
 {
     listcmd,
@@ -1703,7 +1686,8 @@ enum defidx
     cmd_txdvbs2tsourcefilebitrate,
     cmd_txgain,
     cmd_txdigitalgain,
-    cmd_txfirfilter
+    cmd_txfirfilter,
+    cmd_txmute
 
 };
 
@@ -2402,6 +2386,23 @@ bool HandleCommand(char *key, char *svalue)
         break;
     }
 
+    //WorkAround for DATVEasy which send TS even when in stop state
+    case cmd_txmute:
+    {
+        if (strcmp(svalue, "?") != 0)
+        {
+            if (strcmp(svalue, "1")==0) // ptt off
+            {
+                RunTx=false;
+            }
+            else
+            {
+                RunTx=true;
+            };
+        }
+    }
+    break;
+
     
 
 
@@ -2479,7 +2480,7 @@ bool HandleStatus(char *key, char *svalue)
 
             fprintf(stderr, "New sr %d\n", m_SRtx);
 
-            m_sweep=PrepareSpan(WebfftRxFrequency,m_SRtx*fpgainterpol,WebfftRxSpan);
+            //m_sweep=PrepareSpan(WebfftRxFrequency,m_SRtx*fpgainterpol,WebfftRxSpan);
             BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
                                                  // Should be calculated from mm_srtx
             int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;
@@ -2534,7 +2535,7 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     // rx_mode = rx_mode_websocket;
     // rx_mode = rx_mode_udp;
     m_rxmode = rx_mode_pass;
-
+/*
     if (pthread_create(&(m_tid[0]), NULL, &rx_buffer_thread, NULL) != 0)
     {
         fprintf(stderr, "Rx thread cannot be started\n");
@@ -2543,7 +2544,7 @@ void HandleCommandInit(struct mosquitto *mosq, char *sSerial)
     {
         fprintf(stderr, "Rx thread Started\n");
     }
-
+*/
     if (pthread_create(&(m_tidtx[0]), NULL, &tx_buffer_thread, NULL) != 0)
     {
         fprintf(stderr, "Tx thread cannot be started\n");

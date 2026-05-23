@@ -698,7 +698,7 @@ bool ComputeTxSR(char *svalue)
 
     if (fpgainterpol > 1.0)
     {
-        sprintf(sSR, "%.0f", DACSR / 8 / ad9363interpol);
+        sprintf(sSR, "%.0f", DACSR / FPGA_INTERPOL / ad9363interpol);
         fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
         SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
         SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
@@ -774,7 +774,7 @@ bool ComputeTxSRDVBS2(char *svalue)
 
     if (RequestSR >= MinDAC) // High bitrate, no fpga but ad9363ecim if possible
     {
-        if (RequestSR < MaxDAC / 8)
+        if (RequestSR < MaxDAC / FPGA_INTERPOL)
         {
 
             
@@ -852,7 +852,7 @@ bool ComputeTxSRDVBS2(char *svalue)
 
     if (fpgainterpol > 1.0)
     {
-        sprintf(sSR, "%.0f", DACSR / 8 / ad9363interpol);
+        sprintf(sSR, "%.0f", DACSR / FPGA_INTERPOL / ad9363interpol);
         //fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
         SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
         SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
