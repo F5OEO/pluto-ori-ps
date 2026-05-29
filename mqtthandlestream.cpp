@@ -1407,9 +1407,9 @@ void SetTxMode(int Mode)
     break;
      case tx_dvbs:
     {
-        BufferLentx = 204*4*8*DVBS_MAX_NB_BUFFER; // 204 * 8 is a FRAME in DVB-S but should be less
+        BufferLentx = 204*4*8*10;//DVBS_MAX_NB_BUFFER; // 204 * 8 is a FRAME in DVB-S but should be less
 
-        inittxok= InitTxChannel(BufferLentx, 8);
+        inittxok= InitTxChannel(BufferLentx, 64);
         SetFPGAMode(false,true);
            
     }
@@ -1498,6 +1498,7 @@ void *tx_buffer_thread(void *arg)
                     if(write_bbframe()<=0)
                     {
                         //An issue , surely someone else is trying to get the buffer
+                        fprintf(stderr,"BBFRAME Buffer issue : go to passthrough !!!!!\n");
                         SetTxMode(tx_passtrough);
                     };
                 }
@@ -2189,7 +2190,7 @@ bool HandleCommand(char *key, char *svalue)
         }
         m_s2sr = atol(svalue);
 
-        publish("tx/sr", (float)4 * m_s2sr, false);
+        publish("tx/sr", (float)4* m_s2sr, false);
 
         break;
     }
