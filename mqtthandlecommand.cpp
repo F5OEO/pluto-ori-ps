@@ -576,6 +576,17 @@ bool ComputeRxSR(char *svalue)
     return result;
 }
 
+void FirInterp8(bool enable)
+{
+
+    size_t value = ReadRegister(0x79020000 + 0x40BC);
+    if(enable)
+        WriteRegister(0x79020000 + 0x40BC, (value & 0xFFFE) | 1);
+    else    
+        WriteRegister(0x79020000 + 0x40BC, (value & 0xFFFE) | 0);
+    
+}
+
 bool ComputeTxSR(char *svalue)
 {
     if (strcmp(svalue, "?") == 0)
@@ -589,7 +600,7 @@ bool ComputeTxSR(char *svalue)
         // publishstatus(sysfs_ad9361_phy,"in_voltage_sampling_frequency", "tx/sr");
         return true; // This is a request status
     }
-#define FPGA_INTERPOL (1.0)
+#define FPGA_INTERPOL (8.0)
     float MinDAC = 25e6 / 12;
     float MaxDAC = 61.4e6;
     float fpgainterpol = FPGA_INTERPOL; // FPGA INTERPOL
@@ -656,7 +667,7 @@ bool ComputeTxSR(char *svalue)
         }
     }
 
-    DACSR = RequestSR * fpgainterpol * ad9363interpol;
+    DACSR = RequestSR * fpgainterpol ;
     char sSR[255];
     sprintf(sSR, "%.0f", DACSR);
     m_adcdacsr = RequestSR * fpgainterpol;
@@ -698,17 +709,23 @@ bool ComputeTxSR(char *svalue)
 
     if (fpgainterpol > 1.0)
     {
-        sprintf(sSR, "%.0f", DACSR / FPGA_INTERPOL / ad9363interpol);
+        FirInterp8(true);
+        sprintf(sSR, "%.0f", DACSR / ad9363interpol);
+        SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
         fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
-        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
+        //SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+        //SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     else
     {
         sprintf(sSR, "%.0f", DACSR / ad9363interpol);
-        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
+        
+        FirInterp8(true);
+        sprintf(sSR, "%.0f", DACSR / ad9363interpol);
+        //SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
+        //SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
     }
 
     // Automatic Analog LPF bandwidth
@@ -750,69 +767,68 @@ bool ComputeTxSRDVBS2(char *svalue)
         return true; // This is a request status
     }
 
-#define FPGA_DVBS2 4
+#define FPGA_DVBS2 4.0
     float MinDAC = 25e6 / 12;
     float MaxDAC = 61.4e6;
     float fpgainterpol = FPGA_INTERPOL; // FPGA INTERPOL
-    float ad9363interpol = 4.0;
+    float ad9363interpol = 1.0;
 
     bool result = true;
     float RequestSR;
     float DACSR;
 
     RequestSR = atof(svalue); 
+    fprintf(stderr, "SR Request %.0f\n", RequestSR);
 
-    if (RequestSR > MaxDAC) // >61.4M
+    if (RequestSR > MaxDAC)
     {
         return false;
     }
-    if (RequestSR < MinDAC / fpgainterpol / ad9363interpol) // < 16K
+    if (RequestSR < MinDAC / (FPGA_INTERPOL * 4.0))
     {
-        // OR NEED a soft upsampler
+        // Below minimum even with full interpolation
         return false;
     }
 
-    if (RequestSR >= MinDAC) // High bitrate, no fpga but ad9363ecim if possible
+    // Choose the minimum interpolation that puts DACSR in [MinDAC, MaxDAC]
+    if (RequestSR >= MinDAC)
     {
-        if (RequestSR < MaxDAC / FPGA_INTERPOL)
-        {
-
-            
-            ad9363interpol = 1.0;
-            fpgainterpol = FPGA_INTERPOL;
-        }
-        else if (RequestSR < MaxDAC / 4)
-        {
-
-            // ad9363decim=2.0;
-            ad9363interpol = 4.0;
-            fpgainterpol = 1.0;
-        }
-        else
-        {
-
-            ad9363interpol = 1.0;
-            fpgainterpol = 1.0;
-        }
-    }
-    else if (RequestSR >= MinDAC / FPGA_INTERPOL) // We use AD decim
-    {
-        ad9363interpol = 1.0;
+        // No interpolation needed
         fpgainterpol = 1.0;
-        // ad9363interpol = 1.0;
-        fpgainterpol =FPGA_INTERPOL;
+        ad9363interpol = 1.0;
+    }
+    else if (RequestSR * FPGA_INTERPOL >= MinDAC && RequestSR * FPGA_INTERPOL <= MaxDAC)
+    {
+        // FPGA interpolation alone is enough
+        fpgainterpol = FPGA_INTERPOL;
+        ad9363interpol = 1.0;
+    }
+    else if (RequestSR * 4.0 >= MinDAC && RequestSR * 4.0 <= MaxDAC)
+    {
+        // AD9363 interpolation alone is enough
+        fpgainterpol = 1.0;
+        ad9363interpol = 4.0;
     }
     else
     {
-        
-            ad9363interpol = 4.0;
-            fpgainterpol = FPGA_INTERPOL;
-        
+        // Need both
+        fpgainterpol = FPGA_INTERPOL;
+        ad9363interpol = 4.0;
     }
 
     DACSR = RequestSR * fpgainterpol * ad9363interpol;
+
+    // Final sanity check
+    if (DACSR < MinDAC || DACSR > MaxDAC)
+    {
+        fprintf(stderr, "SR calculation error: DACSR=%.0f out of range [%.0f, %.0f]\n",
+                DACSR, MinDAC, MaxDAC);
+        return false;
+    }
+
+        
     char sSR[255];
-    sprintf(sSR, "%.0f", DACSR);
+    sprintf(sSR, "%.0f", DACSR/ad9363interpol);
     m_adcdacsr = RequestSR * fpgainterpol;
     // First set result SR
 
@@ -822,9 +838,7 @@ bool ComputeTxSRDVBS2(char *svalue)
     if (fpgainterpol * ad9363interpol > 1)
         SendCommand(sysfs_ad9361_phy,"out_altvoltage1_TX_LO_powerdown", "1");
     SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
-    SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
-    SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
-
+   
     // AD9363Interpol
     if (ad9363interpol > 1.0)
     {
@@ -852,17 +866,20 @@ bool ComputeTxSRDVBS2(char *svalue)
 
     if (fpgainterpol > 1.0)
     {
-        sprintf(sSR, "%.0f", DACSR / FPGA_INTERPOL / ad9363interpol);
-        //fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
-        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
+        FirInterp8(true);
+        sprintf(sSR, "%.0f", DACSR / ad9363interpol);
+        SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
+        fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
+        
     }
 
     else
     {
+        FirInterp8(false);
         sprintf(sSR, "%.0f", DACSR / ad9363interpol);
-        SendCommand(sysfs_ad9361_tx,"out_voltage_sampling_frequency", sSR); // TX Fpga
-        SendCommand(sysfs_ad9361_rx,"in_voltage_sampling_frequency", sSR);  // RX Fpga
+        SendCommand(sysfs_ad9361_phy,"in_voltage_sampling_frequency", sSR);
+        fprintf(stderr, "dacsr %f fpga %s\n", DACSR, sSR);
+        
     }
 
     // Automatic Analog LPF bandwidth TX
