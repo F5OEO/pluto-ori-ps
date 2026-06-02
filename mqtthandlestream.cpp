@@ -1154,12 +1154,9 @@ bool SendCommand(char *skey, char *svalue);
 
 ssize_t write_bbframe()
 {
-    struct timespec start, now;
-
     unsigned int LazyLut[] = {7, 6, 5, 4, 3, 2, 1, 0};
 
     ssize_t sent = 0;
-    // Normal behavior
 
     pthread_mutex_lock(&buffer_mutextx);
     pthread_mutex_lock(&bufpluto_mutextx);
@@ -1171,29 +1168,39 @@ ssize_t write_bbframe()
         return 0;
     }
     unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
-    buffer_t *newbuf = m_bbframe_queue.front();
-    ssize_t len = newbuf->size;
-    unsigned int IdxStart = LazyLut[(len + 2) % 8];
-    unsigned int IdxStart2 = (8-(len + 2) % 8)%8;
-    memset(buffpluto, 0, 2); // Idx = len -1
+    unsigned char *cur_buff = buffpluto;
+    ssize_t total_len = 0;
 
-    // buffpluto[0] = newbuf->modecod;
-    buffpluto[0] = 0xB8;
-    buffpluto[1] = newbuf->modecod;
-    
-    // fprintf(stderr,"Warning : fec %d short = %d\n",buffpluto[1]&0x1F,buffpluto[1]>>5);
-    memcpy(buffpluto + 2, newbuf->bbframe, newbuf->size);
-    free(newbuf);
-    m_bbframe_queue.pop();
-    pthread_mutex_unlock(&buffer_mutextx);
-    
-    if ((len + 2 + IdxStart + 1) % 8 != 0)
-        fprintf(stderr, "len %d is not mod 8\n", len + 2 + IdxStart + 1);
-    clock_gettime(CLOCK_MONOTONIC, &start);
-
-    if (m_gainvariable ==1 ) // FixMe : Should be max gain
+    while (!m_bbframe_queue.empty())
     {
+        buffer_t *newbuf = m_bbframe_queue.front();
+        ssize_t len = newbuf->size;
+        unsigned int IdxStart2 = (8 - (len + 2) % 8) % 8;
 
+        if ((len + 2 + LazyLut[(len + 2) % 8] + 1) % 8 != 0)
+            fprintf(stderr, "len %d is not mod 8\n", (int)(len + 2 + LazyLut[(len + 2) % 8] + 1));
+
+        cur_buff[0] = 0xB8;
+        cur_buff[1] = newbuf->modecod;
+        memcpy(cur_buff + 2, newbuf->bbframe, len);
+        memset(cur_buff + 2 + len, 0, IdxStart2);
+        free(newbuf);
+        m_bbframe_queue.pop();
+
+        cur_buff  += len + 2 + IdxStart2;
+        total_len += len + 2 + IdxStart2;
+    }
+    pthread_mutex_unlock(&buffer_mutextx);
+
+    if (total_len == 0)
+    {
+        pthread_mutex_unlock(&bufpluto_mutextx);
+        return 0;
+    }
+
+    // Gain is set from the first frame's modecod (buffpluto[1])
+    if (m_gainvariable == 1)
+    {
         float maxgain = 6.5;
         int modecode = buffpluto[1] & 0xF;
         if ((modecode > 0) && (modecode <= 11)) // qpsk
@@ -1210,7 +1217,6 @@ ssize_t write_bbframe()
         {
             char svalue[255];
             sprintf(svalue, "%f", offsetgain + m_maxgain);
-            //fprintf(stderr, "Offset %f Gain %s for modcod %d\n", offsetgain, svalue, buffpluto[1]);
             SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
         }
         else
@@ -1220,23 +1226,23 @@ ssize_t write_bbframe()
     }
     else
     {
-            char svalue[255];
-            sprintf(svalue, "%f", m_maxgain);
-            SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
+        char svalue[255];
+        sprintf(svalue, "%f", m_maxgain);
+        SendCommand("/sys/bus/iio/devices/iio:device0/out_voltage0_hardwaregain", svalue);
     }
-    if(iio_buffer_get_poll_fd(m_txbuf)<=0) 
-    {
-        fprintf(stderr,"Buffer issue\n");
-    }
-    sent = iio_buffer_push_partial(m_txbuf, (len + 2 + IdxStart2 ) / 4);
+
+    if (iio_buffer_get_poll_fd(m_txbuf) <= 0)
+        fprintf(stderr, "Buffer issue\n");
+
+    struct timespec start, now;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    sent = iio_buffer_push_partial(m_txbuf, total_len / 4);
     pthread_mutex_unlock(&bufpluto_mutextx);
-    // AGC TX Gain
 
     clock_gettime(CLOCK_MONOTONIC, &now);
-
     size_t diff_us = (now.tv_sec - start.tv_sec) * 1000000L;
     diff_us += (now.tv_nsec - start.tv_nsec) / 1000L;
-    // fprintf(stderr,"Diff %u \n",diff_us);
+
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
     if (val & 1)
@@ -1265,18 +1271,17 @@ ssize_t write_dvbsframe()
         return 0;
     }
     unsigned char *buffpluto = (unsigned char *)iio_buffer_start(m_txbuf);
-    ssize_t len=0;
-     unsigned char *cur_buff=buffpluto;
-    //for(int i=0;i<(m_bbframe_queue.size())&&(i<DVBS_MAX_NB_BUFFER);i++) 
+    ssize_t len = 0;
+    unsigned char *cur_buff = buffpluto;
+
+    for (int i = 0; !m_bbframe_queue.empty() && i < DVBS_MAX_NB_BUFFER; i++)
     {
-    buffer_t *newbuf = m_bbframe_queue.front();
-    len += newbuf->size;
-    
-    memcpy(cur_buff , newbuf->bbframe, newbuf->size);
-    cur_buff+=newbuf->size;
-    free(newbuf);
-    m_bbframe_queue.pop();
-    
+        buffer_t *newbuf = m_bbframe_queue.front();
+        memcpy(cur_buff, newbuf->bbframe, newbuf->size);
+        cur_buff += newbuf->size;
+        len += newbuf->size;
+        free(newbuf);
+        m_bbframe_queue.pop();
     }
     pthread_mutex_unlock(&buffer_mutextx);
     
@@ -1295,7 +1300,7 @@ ssize_t write_dvbsframe()
     {
         char error[255];
         iio_strerror(-sent,error,255);
-        fprintf(stderr,"iio buffer error %s \n",error);    
+        fprintf(stderr,"iio buffer error %s Len %d sent %d \n",error,len,sent);    
     }
     //fprintf(stderr,"iio buffer try %d , result %d\n",len,sent);
     pthread_mutex_unlock(&bufpluto_mutextx);
@@ -1407,9 +1412,9 @@ void SetTxMode(int Mode)
     break;
      case tx_dvbs:
     {
-        BufferLentx = 204*4*8*10;//DVBS_MAX_NB_BUFFER; // 204 * 8 is a FRAME in DVB-S but should be less
+        BufferLentx = 204*4*8*DVBS_MAX_NB_BUFFER; // 204 * 8 is a FRAME in DVB-S but should be less
 
-        inittxok= InitTxChannel(BufferLentx, 64);
+        inittxok= InitTxChannel(BufferLentx, 16);
         SetFPGAMode(false,true);
            
     }
@@ -1423,13 +1428,24 @@ void SetTxMode(int Mode)
 
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
-    while ((val & 1) == 0)
+    int timeout_ms = 1000;
+    int elapsed = 0;
+
+    while ((val & 1) == 0 && elapsed < timeout_ms)
     {
-        fprintf(stderr, "Wait for purging\n");
+        fprintf(stderr, "Wait for purging (%d ms)\n", elapsed);
         usleep(1000);
+        elapsed++;
         iio_device_reg_read(m_tx, 0x80000088, &val);
     }
-    iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
+
+    if ((val & 1) == 0) {
+        fprintf(stderr, "ERROR: DMA purge timeout!\n");
+        // gestion d'erreur
+        
+    }
+
+    iio_device_reg_write(m_tx, 0x80000088, val);
     pthread_mutex_unlock(&bufpluto_mutextx);
 }
 
