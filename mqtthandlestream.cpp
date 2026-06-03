@@ -276,7 +276,7 @@ void SwitchFirFilter(int NoFilter)
     
 }
 
-#define switchsrc 0x43C00000
+#define switchsrc 0x43C03000
 #define switchdest 0x43C01000
 #define switchfir 0x43C02000 //C4 is already use bu vco of antsdr
 void SetFPGAMode(bool dvbs2,bool iq_fir)
