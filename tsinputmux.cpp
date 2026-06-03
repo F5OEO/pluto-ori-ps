@@ -101,6 +101,460 @@ uint8_t m_variable_ts_coderate;
 #define MAX_QUEUE_ITEM 100
 #define MAX_QUEUE_CHANGEMODCOD 2
 
+// =============================================================================
+//  BitrateEstimator — sliding window input bitrate measurement
+//
+//  addBytes() is called for every real (non-null) TS packet entering addneonts().
+//  getRateKbps() returns the average input bitrate over the last WINDOW_MS ms.
+//  This gives the adaptive controller a direct measurement of what the input
+//  actually needs, independent of queue depth.
+// =============================================================================
+#define BITRATE_WINDOW_MS  500   // measurement window in ms
+
+class BitrateEstimator
+{
+public:
+    BitrateEstimator() : m_head(0), m_totalBytes(0) {}
+
+    void addBytes(size_t n)
+    {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        uint64_t nowMs = (uint64_t)now.tv_sec * 1000ULL + now.tv_nsec / 1000000ULL;
+
+        // Expire old buckets outside the window
+        expireOld(nowMs);
+
+        // Add to current bucket (create if needed)
+        if (m_head == 0 || m_buckets[m_head - 1].timeMs != nowMs)
+        {
+            if (m_head < MAX_BUCKETS)
+            {
+                m_buckets[m_head].timeMs = nowMs;
+                m_buckets[m_head].bytes  = n;
+                m_head++;
+            }
+        }
+        else
+        {
+            m_buckets[m_head - 1].bytes += n;
+        }
+        m_totalBytes += n;
+    }
+
+    // Returns bitrate in kbps based on the current window
+    uint32_t getRateKbps() const
+    {
+        if (m_totalBytes == 0 || m_head == 0) return 0;
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        uint64_t nowMs = (uint64_t)now.tv_sec * 1000ULL + now.tv_nsec / 1000000ULL;
+        uint64_t oldest = (m_head > 0) ? m_buckets[0].timeMs : nowMs;
+        uint64_t spanMs = nowMs - oldest;
+        if (spanMs < 50) spanMs = 50; // avoid division by tiny interval at startup
+        return (uint32_t)((m_totalBytes * 8ULL * 1000ULL) / (spanMs * 1000ULL));
+    }
+
+private:
+    static const int MAX_BUCKETS = 600; // 1 per ms, 500ms window + margin
+    struct Bucket { uint64_t timeMs; size_t bytes; };
+    Bucket   m_buckets[MAX_BUCKETS];
+    int      m_head;
+    size_t   m_totalBytes;
+
+    void expireOld(uint64_t nowMs)
+    {
+        uint64_t cutoff = (nowMs > BITRATE_WINDOW_MS) ? nowMs - BITRATE_WINDOW_MS : 0;
+        int keep = 0;
+        for (int i = 0; i < m_head; i++)
+            if (m_buckets[i].timeMs >= cutoff) { m_buckets[keep++] = m_buckets[i]; }
+            else m_totalBytes -= m_buckets[i].bytes;
+        m_head = keep;
+    }
+};
+
+static BitrateEstimator g_bitrateEstimator;
+
+// =============================================================================
+//  AdaptiveModCod — DVB-S2 FEC code rate adaptation for VBR transport streams
+//
+//  Primary signal: measured input bitrate (kbps) from BitrateEstimator.
+//  Secondary signal: queue depth used only as a health check.
+//  Underflow: immediate step-down + ceiling ratchet.
+//  Ceiling: lowered on underflow, relaxed by +1 step every 30s of stability.
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+//  FEC table — sorted ascending by code rate (lowest rate = most robust).
+// ---------------------------------------------------------------------------
+struct FecEntry {
+    uint8_t  fec;
+    uint8_t  num;
+    uint8_t  den;
+    const char *label;
+};
+
+static const FecEntry kFecTable[] = {
+    { C1_4,  1, 4,  "1/4"  },
+    { C1_3,  1, 3,  "1/3"  },
+    { C2_5,  2, 5,  "2/5"  },
+    { C1_2,  1, 2,  "1/2"  },
+    { C3_5,  3, 5,  "3/5"  },
+    { C2_3,  2, 3,  "2/3"  },
+    { C3_4,  3, 4,  "3/4"  },
+    { C4_5,  4, 5,  "4/5"  },
+    { C5_6,  5, 6,  "5/6"  },
+    { C8_9,  8, 9,  "8/9"  },
+    { C9_10, 9, 10, "9/10" },
+};
+static const int kFecCount = (int)(sizeof(kFecTable) / sizeof(kFecTable[0]));
+
+// ---------------------------------------------------------------------------
+//  Tuning parameters
+// ---------------------------------------------------------------------------
+#define AMODCOD_HEADROOM              0.10f   // 10% capacity margin above measured bitrate
+#define AMODCOD_COOLDOWN_MS           400     // min ms between any two switches
+#define AMODCOD_MIN_IDX               0
+#define AMODCOD_MAX_IDX               (kFecCount - 1)
+#define AMODCOD_UNDERFLOW_STEP        2       // step-down on underflow
+#define AMODCOD_UNDERFLOW_PENALTY_MS  1000    // base upgrade freeze after underflow
+#define AMODCOD_CEILING_RELAX_MS      30000   // ms of stability before ceiling rises +1
+#define AMODCOD_QUEUE_URGENT          20      // queue depth above which upgrade is immediate
+
+static int bitsPerSymbol(uint8_t constellation)
+{
+    switch (constellation)
+    {
+        case M_QPSK:   return 2;
+        case M_8PSK:   return 3;
+        case M_16APSK: return 4;
+        case M_32APSK: return 5;
+        default:       return 2;
+    }
+}
+
+class AdaptiveModCod
+{
+public:
+    AdaptiveModCod()
+        : m_currentIdx(0), m_initialized(false)
+        , m_underflowPenaltyActive(false)
+        , m_ceilingIdx(AMODCOD_MAX_IDX)
+        , m_upgradeConfirmCount(0)
+        , m_pendingUpgradeIdx(-1)
+        , m_symbolRateKsps(27000)
+    {
+        memset(&m_cooldownExpiry,         0, sizeof(m_cooldownExpiry));
+        memset(&m_underflowPenaltyExpiry, 0, sizeof(m_underflowPenaltyExpiry));
+        memset(&m_lastUnderflowTime,      0, sizeof(m_lastUnderflowTime));
+        memset(&m_lastCeilingRelaxTime,   0, sizeof(m_lastCeilingRelaxTime));
+    }
+
+    // symbolRateKsps: actual TX symbol rate in ksps (= m_SRtx / 4000, FPGA has 4x interpolator)
+    void init(const DVB2FrameFormat &baseFmt, uint32_t symbolRateKsps)
+    {
+        m_baseFmt                = baseFmt;
+        m_symbolRateKsps         = symbolRateKsps;
+        m_currentIdx             = fecToIdx(baseFmt.fec);
+        m_underflowPenaltyActive = false;
+        m_ceilingIdx             = AMODCOD_MAX_IDX;
+        m_upgradeConfirmCount    = 0;
+        m_pendingUpgradeIdx      = -1;
+        m_initialized            = true;
+        clock_gettime(CLOCK_MONOTONIC, &m_cooldownExpiry);
+        clock_gettime(CLOCK_MONOTONIC, &m_lastUnderflowTime);
+        clock_gettime(CLOCK_MONOTONIC, &m_lastCeilingRelaxTime);
+        fprintf(stderr, "[AdaptiveModCod] init fec=%s (idx=%d) bps/sym=%d Rs=%uksps cap_max=%ukbps\n",
+                kFecTable[m_currentIdx].label, m_currentIdx,
+                bitsPerSymbol(baseFmt.constellation), m_symbolRateKsps,
+                netCapacityKbps(AMODCOD_MAX_IDX));
+    }
+
+    void notifyUnderflow()
+    {
+        if (!m_initialized) return;
+        int newCeiling = m_currentIdx - 1;
+        if (newCeiling < AMODCOD_MIN_IDX) newCeiling = AMODCOD_MIN_IDX;
+        if (newCeiling < m_ceilingIdx)    m_ceilingIdx = newCeiling;
+
+        int newIdx = m_currentIdx - AMODCOD_UNDERFLOW_STEP;
+        if (newIdx < AMODCOD_MIN_IDX) newIdx = AMODCOD_MIN_IDX;
+
+        fprintf(stderr, "[AdaptiveModCod] UNDERFLOW: fec %s -> %s  (ceiling=%s)\n",
+                kFecTable[m_currentIdx].label, kFecTable[newIdx].label,
+                kFecTable[m_ceilingIdx].label);
+
+        m_currentIdx          = newIdx;
+        m_upgradeConfirmCount = 0;
+        m_pendingUpgradeIdx   = -1;
+
+        uint32_t R = g_bitrateEstimator.getRateKbps();
+        uint32_t C = netCapacityKbps(m_currentIdx);
+        long penaltyMs = AMODCOD_UNDERFLOW_PENALTY_MS;
+        if (C > 0 && R > C)
+            penaltyMs += (long)(((float)(R - C) / C) * 2000.0f);
+        if (penaltyMs > 5000) penaltyMs = 5000;
+
+        clock_gettime(CLOCK_MONOTONIC, &m_underflowPenaltyExpiry);
+        m_underflowPenaltyExpiry.tv_sec  += penaltyMs / 1000;
+        m_underflowPenaltyExpiry.tv_nsec += (penaltyMs % 1000) * 1000000L;
+        if (m_underflowPenaltyExpiry.tv_nsec >= 1000000000L) {
+            m_underflowPenaltyExpiry.tv_sec++;
+            m_underflowPenaltyExpiry.tv_nsec -= 1000000000L;
+        }
+        m_underflowPenaltyActive = true;
+        clock_gettime(CLOCK_MONOTONIC, &m_lastUnderflowTime);
+        clock_gettime(CLOCK_MONOTONIC, &m_lastCeilingRelaxTime);
+    }
+
+    bool evaluate(size_t queueDepth, DVB2FrameFormat &activeFmt)
+    {
+        if (!m_initialized) { activeFmt = m_baseFmt; return false; }
+
+        if (m_underflowPenaltyActive && elapsedMs(m_underflowPenaltyExpiry) >= 0)
+            m_underflowPenaltyActive = false;
+
+        if (m_ceilingIdx < AMODCOD_MAX_IDX &&
+            elapsedMs(m_lastCeilingRelaxTime) >= AMODCOD_CEILING_RELAX_MS)
+        {
+            m_ceilingIdx++;
+            clock_gettime(CLOCK_MONOTONIC, &m_lastCeilingRelaxTime);
+            fprintf(stderr, "[AdaptiveModCod] ceiling relaxed to %s\n",
+                    kFecTable[m_ceilingIdx].label);
+        }
+
+        uint32_t R_kbps   = g_bitrateEstimator.getRateKbps();
+        uint32_t R_needed = (uint32_t)(R_kbps * (1.0f + AMODCOD_HEADROOM));
+        int targetIdx     = findMinSufficientIdx(R_needed);
+
+        if (targetIdx > m_ceilingIdx) targetIdx = m_ceilingIdx;
+
+        // Ceiling/floor trap: if ceiling == current and current is still insufficient,
+        // jump the ceiling directly to the minimum rate that can carry R_needed.
+        // A +1 step-up is too slow when the bitrate has spiked several steps above
+        // what the current ceiling provides.
+        if (targetIdx == m_currentIdx
+            && netCapacityKbps(m_currentIdx) < R_needed
+            && m_ceilingIdx == m_currentIdx
+            && !m_underflowPenaltyActive)
+        {
+            int minSuff = findMinSufficientIdx(R_needed);
+            m_ceilingIdx = (minSuff > m_ceilingIdx) ? minSuff : m_ceilingIdx + 1;
+            if (m_ceilingIdx > AMODCOD_MAX_IDX) m_ceilingIdx = AMODCOD_MAX_IDX;
+            targetIdx = m_ceilingIdx;
+            fprintf(stderr, "[AdaptiveModCod] ceiling forced up to %s (insufficient FEC)\n",
+                    kFecTable[m_ceilingIdx].label);
+        }
+
+        bool queueUrgent = ((int)queueDepth > AMODCOD_QUEUE_URGENT);
+
+        bool doSwitch = false;
+        if (targetIdx > m_currentIdx)
+        {
+            if (queueUrgent)
+            {
+                // Queue is growing faster than the encoder can drain it.
+                // Upgrade immediately — skip confirm count and cooldown.
+                doSwitch = true;
+            }
+            else if (!m_underflowPenaltyActive)
+            {
+                if (m_pendingUpgradeIdx != targetIdx) {
+                    m_pendingUpgradeIdx   = targetIdx;
+                    m_upgradeConfirmCount = 0;
+                }
+                if (++m_upgradeConfirmCount >= 3 && cooldownExpired())
+                    doSwitch = true;
+            }
+        }
+        else if (targetIdx < m_currentIdx && R_kbps > 0 && cooldownExpired() && !queueUrgent)
+        {
+            // Downgrade only when bitrate is real, cooldown elapsed, and the
+            // queue is not under pressure — prevents hunting on bursty streams.
+            m_upgradeConfirmCount = 0;
+            m_pendingUpgradeIdx   = -1;
+            doSwitch = true;
+        }
+        else
+        {
+            m_upgradeConfirmCount = 0;
+        }
+
+        if (doSwitch)
+        {
+            fprintf(stderr,
+                "[AdaptiveModCod] fec %s -> %s  (R=%ukbps need=%ukbps cap=%ukbps q=%zu ceil=%s)\n",
+                kFecTable[m_currentIdx].label, kFecTable[targetIdx].label,
+                R_kbps, R_needed, netCapacityKbps(targetIdx), queueDepth,
+                m_ceilingIdx < AMODCOD_MAX_IDX ? kFecTable[m_ceilingIdx].label : "none");
+            m_currentIdx          = targetIdx;
+            m_upgradeConfirmCount = 0;
+            m_pendingUpgradeIdx   = -1;
+            resetCooldown();
+        }
+
+        activeFmt     = m_baseFmt;
+        activeFmt.fec = kFecTable[m_currentIdx].fec;
+        return doSwitch;
+    }
+
+    const char *fecLabel() const { return m_initialized ? kFecTable[m_currentIdx].label : "uninit"; }
+
+private:
+    DVB2FrameFormat m_baseFmt;
+    int             m_currentIdx;
+    bool            m_initialized;
+    bool            m_underflowPenaltyActive;
+    int             m_ceilingIdx;
+    int             m_upgradeConfirmCount;
+    int             m_pendingUpgradeIdx;
+    uint32_t        m_symbolRateKsps;
+    struct timespec m_cooldownExpiry;
+    struct timespec m_underflowPenaltyExpiry;
+    struct timespec m_lastUnderflowTime;
+    struct timespec m_lastCeilingRelaxTime;
+
+    uint32_t netCapacityKbps(int idx) const
+    {
+        int bps = bitsPerSymbol(m_baseFmt.constellation);
+        return (uint32_t)((uint64_t)m_symbolRateKsps * bps
+                          * kFecTable[idx].num / kFecTable[idx].den);
+    }
+
+    int findMinSufficientIdx(uint32_t needed_kbps) const
+    {
+        for (int i = AMODCOD_MIN_IDX; i <= AMODCOD_MAX_IDX; i++)
+            if (netCapacityKbps(i) >= needed_kbps) return i;
+        return AMODCOD_MAX_IDX;
+    }
+
+    int fecToIdx(uint8_t fec) const
+    {
+        for (int i = 0; i < kFecCount; i++)
+            if (kFecTable[i].fec == fec) return i;
+        return AMODCOD_MIN_IDX;
+    }
+
+    long elapsedMs(const struct timespec &ts) const
+    {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        return (long)((now.tv_sec - ts.tv_sec) * 1000L
+                    + (now.tv_nsec - ts.tv_nsec) / 1000000L);
+    }
+
+    bool cooldownExpired() const { return elapsedMs(m_cooldownExpiry) >= 0; }
+
+    void resetCooldown()
+    {
+        clock_gettime(CLOCK_MONOTONIC, &m_cooldownExpiry);
+        m_cooldownExpiry.tv_sec  += AMODCOD_COOLDOWN_MS / 1000;
+        m_cooldownExpiry.tv_nsec += (AMODCOD_COOLDOWN_MS % 1000) * 1000000L;
+        if (m_cooldownExpiry.tv_nsec >= 1000000000L) {
+            m_cooldownExpiry.tv_sec++;
+            m_cooldownExpiry.tv_nsec -= 1000000000L;
+        }
+    }
+};
+static AdaptiveModCod g_adaptiveModCod;
+// ============================================================================= end AdaptiveModCod
+
+// Plain wrapper callable from other translation units without exposing the class type
+void adaptive_modcod_notify_underflow()
+{
+    g_adaptiveModCod.notifyUnderflow();
+}
+
+// ── Intermediate TS packet buffer ─────────────────────────────────────────────
+// Decouples TS ingestion from BBframe encoding so the modcod decision is made
+// at the START of each BBframe, before any of its TS packets enter the encoder.
+// ─────────────────────────────────────────────────────────────────────────────
+#define TS_PREBUF_MAX 512
+
+struct TsEntry {
+    uint8_t pkt[188];
+    bool    isSdt;
+};
+
+static queue<TsEntry> g_ts_prebuf;
+static bool            g_bbframe_at_start  = true;
+static DVB2FrameFormat g_bbframe_active_fmt;
+
+static void prebuf_push(const uint8_t *src, bool isSdt)
+{
+    if ((int)g_ts_prebuf.size() >= TS_PREBUF_MAX)
+    {
+        fprintf(stderr, "TS prebuf overflow — dropping packet\n");
+        return;
+    }
+    TsEntry e;
+    memcpy(e.pkt, src, 188);
+    e.isSdt = isSdt;
+    g_ts_prebuf.push(e);
+}
+
+static void encode_from_prebuf()
+{
+    extern unsigned char getdvbs2modcod(uint FrameType, uint Constellation,
+                                        uint CodeRate, uint Pilots);
+    extern uint8_t  *customsdt;
+    extern uint8_t   customnullpacket[188];
+    extern unsigned int BBFrameLenLut2[22];
+    extern void      update_cont_counter(uint8_t *b);
+    extern bool      addbbframe(uint8_t *bbframe, size_t len, size_t modcod);
+    while (!g_ts_prebuf.empty())
+    {
+        if (g_bbframe_at_start)
+        {
+            if (m_Fecmode == fec_variable)
+                g_adaptiveModCod.evaluate(m_bbframe_queue.size(), g_bbframe_active_fmt);
+            else
+                g_bbframe_active_fmt = fmt;
+
+            dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&g_bbframe_active_fmt, 0);
+            m_efficiency = dvbs2neon_control(STREAM0, CONTROL_GET_EFFICIENCY, 0, 0);
+            g_bbframe_at_start = false;
+        }
+
+        TsEntry e = g_ts_prebuf.front();
+        g_ts_prebuf.pop();
+
+        if (e.isSdt)
+            update_cont_counter(customsdt);
+
+        unsigned short *bbframeptr =
+            (unsigned short *)dvbs2neon_packet(0, (uint32)(e.pkt), 0);
+
+        if (bbframeptr != NULL)
+        {
+            unsigned short *p16      = (unsigned short *)bbframeptr;
+            unsigned short ByteCount = p16[-1];
+
+            int i = 0;
+            for (; i < (int)(sizeof(BBFrameLenLut2) / sizeof(BBFrameLenLut2[0])); i++)
+                if (BBFrameLenLut2[i] / 8 == ByteCount) break;
+            int coderate = (i >= 11) ? i - 11 : i;
+
+            unsigned char curmodcod = getdvbs2modcod(
+                g_bbframe_active_fmt.frame_type == 0 ? 0 : 1,
+                g_bbframe_active_fmt.constellation,
+                g_bbframe_active_fmt.fec,
+                g_bbframe_active_fmt.pilots);
+
+            m_variable_ts_coderate = coderate;
+            addbbframe((uint8_t *)bbframeptr, ByteCount, curmodcod);
+
+            g_bbframe_at_start = true;
+        }
+    }
+}
+
+void adaptive_modcod_update_sr(uint32_t srKsps)
+{
+    g_adaptiveModCod.init(fmt, srKsps);
+    g_bbframe_at_start = true;
+}
+
 enum
 {
     tssource_udp,
@@ -154,16 +608,18 @@ bool addbbframe(uint8_t *bbframe, size_t len, size_t modcod)
     */
     if ((m_bbframe_queue.size() >= MAX_QUEUE_ITEM))
     {
-        fprintf(stderr, "MUXTS : Queue is full ! Purging %d bbframe\n", m_bbframe_queue.size());
-        // newbuf->modecod=m_ModeCod;
+        fprintf(stderr, "MUXTS : Queue is full ! Purging %zu bbframe\n", m_bbframe_queue.size());
         while (m_bbframe_queue.size() > 1)
         {
-            buffer_t *oldestbuf = m_bbframe_queue.front(); // Remove the oldest
-
+            buffer_t *oldestbuf = m_bbframe_queue.front();
             free(oldestbuf);
-
             m_bbframe_queue.pop();
         }
+        // Queue overflow is as severe as a DMA underflow: the encoder cannot
+        // drain BBframes fast enough for the current FEC rate. Penalise the
+        // ceiling and force a step-down so the controller reacts immediately.
+        if (m_Fecmode == fec_variable)
+            g_adaptiveModCod.notifyUnderflow();
     }
 
     /*if (m_bbframe_queue.size() <= MAX_QUEUE_CHANGEMODCOD)
@@ -331,119 +787,61 @@ void correctcc(uint8_t *tspacket, bool discountinuity)
 
 void addneonts(uint8_t *tspacket, size_t length)
 {
-    unsigned short *bbframeptr = NULL;
-    uint8_t *cur_packet = tspacket;
-
     if (length % 188 != 0)
     {
         fprintf(stderr, "Ts input error len %d\n", length);
         return;
     }
-    for (int i = 0; i < length / 188; i++)
+
+    // ── Phase 1: Ingest ───────────────────────────────────────────────────────
+    // Preprocess each TS packet and push it into the intermediate buffer.
+    // No encoding decisions here — the encoder is not touched in this phase.
+    uint8_t *cur_packet = tspacket;
+    for (int i = 0; i < (int)(length / 188); i++, cur_packet += 188)
     {
-        // pthread_mutex_lock(&buffer_mutexts);
         if (cur_packet[0] != 0x47)
         {
             fprintf(stderr, "Ts input error aligned %x\n", cur_packet[0]);
             return;
         }
-        if ((m_Fecmode == fec_variable) && GetPid((char *)cur_packet) == 0x1FFF) // Remove TS padding
-        {
-            cur_packet += 188;
 
+        // In variable-FEC mode strip incoming null packets (0x1FFF); they only
+        // dilute the bitrate measurement and waste BBframe capacity.
+        if (m_Fecmode == fec_variable && GetPid((char *)cur_packet) == 0x1FFF)
             continue;
-            // Nothing to add
-        }
-        ProcessCorectPCR(cur_packet, 188); // Correct PCR
 
-        if (GetPid((char *)cur_packet) == 0x11) // replace sdt
+        // Count only real content — exclude internal stuffing packets (0x1FFE,
+        // injected by setpaddingts when the queue is empty). Counting them would
+        // inflate the bitrate estimate, causing the algorithm to pick a higher
+        // code rate, which in turn needs more stuffing — a feedback loop that
+        // results in permanently elevated null-packet overhead.
+        if (GetPid((char *)cur_packet) != 0x1FFE)
+            g_bitrateEstimator.addBytes(188);
+        ProcessCorectPCR(cur_packet, 188);
+
+        if (GetPid((char *)cur_packet) == 0x11)
         {
-            bbframeptr = (unsigned short *)dvbs2neon_packet(0, (uint32)(customsdt), 0);
-            update_cont_counter(customsdt);
+            // SDT: buffer the replacement packet; counter update deferred to encode phase
+            prebuf_push(customsdt, true);
         }
         else if (GetPid((char *)cur_packet) == 0x1FFF)
         {
-            bbframeptr = (unsigned short *)dvbs2neon_packet(0, (uint32)(customnullpacket), 0);
+            prebuf_push(customnullpacket, false);
         }
         else
         {
             size_t piderror = InspectCC(cur_packet, 188);
             if (piderror != 8192)
                 Lastpidccerror = piderror;
-            bbframeptr = (unsigned short *)dvbs2neon_packet(0, (uint32)(cur_packet), 0);
-        }
-        cur_packet += 188;
-        if (bbframeptr != NULL)
-        {
-            static int count = 0;
-            // bbframeptr = (unsigned char *)dvbs2neon_control(STREAM0, CONTROL_GET_LAST_BBFRAME, (uint32)BBFrameNeonBuff, 0);
-
-            unsigned short *p16 = (unsigned short *)bbframeptr;
-            unsigned short ByteCount = p16[-1];
-            uchar *p8 = (uchar *)bbframeptr;
-            uchar output_format = p8[-3];
-            uchar fec = p8[-5];
-            uchar frame_type = p8[-7];
-            // fprintf(stderr,"bbframe %d\n",ByteCount);
-            int i = 0;
-
-            for (i = 0; i < sizeof(BBFrameLenLut2); i++)
-            {
-                if (BBFrameLenLut2[i] / 8 == ByteCount)
-                    break;
-            }
-
-            int coderate;
-            if (i >= 11) // longframe
-            {
-                coderate = i - 11;
-            }
-            else
-                coderate = i;
-            extern unsigned char getdvbs2modcod(uint FrameType, uint Constellation, uint CodeRate, uint Pilots);
-            unsigned char curmodcod = getdvbs2modcod(fmt.frame_type == 0 ? 0 : 1, fmt.constellation, coderate, fmt.pilots);
-
-            m_variable_ts_coderate = coderate;
-            addbbframe((uint8_t *)bbframeptr, ByteCount, curmodcod);
-
-            if ((m_Fecmode == fec_variable) /*&& (m_bbframe_queue.size() >= 2)*/)
-            {
-                tempmodecode = fmt;
-                int fecoffset = (m_bbframe_queue.size() / 2);
-                if (fecoffset > m_FecRange)
-                {
-                    fecoffset = m_FecRange;
-                }
-
-                if (fecoffset + tempmodecode.fec > 10)
-                    tempmodecode.fec = 10;
-                else
-                    tempmodecode.fec += fecoffset;
-                // fprintf(stderr,"Variable queu %d fec %d\n",m_bbframe_queue.size(),tempmodecode.fec);
-                int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&tempmodecode, 0);
-            }
-            else
-            {
-                int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
-            }
-            m_efficiency = dvbs2neon_control(STREAM0, CONTROL_GET_EFFICIENCY, 0, 0);
-            /*
-              addbbframe((uint8_t *)bbframeptr, ByteCount,m_ModeCod+(count+1)%2);
-
-              tempmodecode.constellation=fmt.constellation;
-              tempmodecode.fec=fmt.fec;
-              tempmodecode.frame_type=fmt.frame_type;
-              tempmodecode.output_format=fmt.output_format;
-              tempmodecode.pilots=fmt.pilots;
-              tempmodecode.roll_off=fmt.roll_off;
-              //fprintf(stderr,"neon %d %d \n",fmt.fec,fmt.frame_type);
-              tempmodecode.fec+=count;
-              int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&tempmodecode, 0);
-              count=(count+1)%2;
-              */
-            // pthread_mutex_unlock(&buffer_mutexts);
+            prebuf_push(cur_packet, false);
         }
     }
+
+    // ── Phase 2: Encode ───────────────────────────────────────────────────────
+    // Drain the intermediate buffer into BBframes. The modcod is chosen once
+    // at the start of each BBframe, before any of its TS packets enter the
+    // encoder, so SET_PARAMETERS is always applied at a clean boundary.
+    encode_from_prebuf();
 }
 
 void adddvbsframe(uint8_t *tspacket)
@@ -817,12 +1215,14 @@ void setneonmodcod(uint Constellation, uint CodeRate, uint FrameType, uint Pilot
     if (filter == 1)
         fmt.roll_off = RO_0_15;
 
-    // FixMe : Modcod should be changed ONLY when a bbframe is complete or at startup
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
     modulator_mapping(fmt.constellation, CodeRate);
 
     m_efficiency = dvbs2neon_control(STREAM0, CONTROL_GET_EFFICIENCY, 0, 0);
 
+    // Re-seed the adaptive controller so it uses the new operator baseline
+    { extern size_t m_SRtx; g_adaptiveModCod.init(fmt, (uint32_t)(m_SRtx / 4000)); }
+    g_bbframe_at_start = true;
     // pthread_mutex_unlock(&buffer_mutexts);
 }
 
@@ -927,6 +1327,7 @@ void setpaddingts()
     pthread_mutex_unlock(&buffer_mutexts);
 }
 
+
 void updatesdt(char *custom)
 {
     FILE *cmd = popen("fw_printenv -n call", "r");
@@ -997,6 +1398,9 @@ void init_tsmux(char *mcast_ts, char *mcast_iface)
     fmt.pilots = PILOTS_OFF;
     fmt.roll_off = RO_0_20;
     int status = dvbs2neon_control(STREAM0, CONTROL_SET_PARAMETERS, (uint32)&fmt, 0);
+
+    // Seed the adaptive ModCod controller with the startup baseline
+    { extern size_t m_SRtx; g_adaptiveModCod.init(fmt, (uint32_t)(m_SRtx / 4000)); }
 
     // DVBS INIT
     dvbsenco_init();

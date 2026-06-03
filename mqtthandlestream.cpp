@@ -134,7 +134,7 @@ static int m_offset;  // Current offset into the buffer
 
 /* Some usefull variabe to get */
 
-size_t m_latency = 20000; // Latency at 80ms by default
+size_t m_latency = 2000; // Latency at 80ms by default
 size_t Underflow = 0;
 size_t m_SR = 3000000;
 float m_maxgain = -100.0; // Impossible gain, means not AGC
@@ -557,7 +557,7 @@ bool InitTxChannel(size_t len, unsigned int nbBuffer)
         m_ctx = iio_create_local_context();
     if (m_ctx == NULL)
         fprintf(stderr, "Init context fail\n");
-    iio_context_set_timeout(m_ctx, 1000);
+    iio_context_set_timeout(m_ctx, 5000);
 
     get_ad9361_stream_dev(m_ctx, TX, &m_tx);
     // fprintf(stderr,"* Initializing AD9361 IIO streaming channels\n");
@@ -1171,7 +1171,7 @@ ssize_t write_bbframe()
     unsigned char *cur_buff = buffpluto;
     ssize_t total_len = 0;
 
-    while (!m_bbframe_queue.empty())
+    //while (!m_bbframe_queue.empty())
     {
         buffer_t *newbuf = m_bbframe_queue.front();
         ssize_t len = newbuf->size;
@@ -1237,6 +1237,14 @@ ssize_t write_bbframe()
     struct timespec start, now;
     clock_gettime(CLOCK_MONOTONIC, &start);
     sent = iio_buffer_push_partial(m_txbuf, total_len / 4);
+
+    if(sent!=total_len)
+    {
+        char error[255];
+        iio_strerror(-sent,error,255);
+        fprintf(stderr,"iio buffer error %s Len %d sent %d \n",error,total_len,sent);    
+    }
+
     pthread_mutex_unlock(&bufpluto_mutextx);
 
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -1250,6 +1258,11 @@ ssize_t write_bbframe()
         fprintf(stderr, "@");
         fflush(stderr);
         iio_device_reg_write(m_tx, 0x80000088, val); // Clear bits
+        if (m_Fecmode == fec_variable)
+        {
+            extern void adaptive_modcod_notify_underflow();
+            adaptive_modcod_notify_underflow();
+        }
     }
 
     return sent;
@@ -1389,8 +1402,8 @@ void SetTxMode(int Mode)
         static int debugbuffer = 2;
         BufferLentx = ((58192 / 8) + 8) * 20; // MAX BBFRAME LENGTH aligned 8
         // Should be calculated from mm_srtx
-        int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;
-
+        //int nbBuffer = ((m_SRtx / 2000000) / 2) * 8;
+        int nbBuffer = 8;
         inittxok=InitTxChannel(BufferLentx, nbBuffer >= 2 ? nbBuffer : 2);
         // InitTxChannel(BufferLentx,debugbuffer);
         debugbuffer *= 2;
@@ -1520,7 +1533,9 @@ void *tx_buffer_thread(void *arg)
                 }
                 else // No more data : need padding
                 {
-
+                    // setpaddingts() uses PID 0x1FFE which passes through the
+                    // fec_variable null-stripping filter (only 0x1FFF is stripped).
+                    // Safe to call in both fixed and variable mode.
                     if (m_txmode == tx_dvbs2_ts)
                         setpaddingts();
                     if (m_txmode == tx_dvbs2_gse)
@@ -2496,6 +2511,9 @@ bool HandleStatus(char *key, char *svalue)
             m_SRtx = atol(svalue);
 
             fprintf(stderr, "New sr %d\n", m_SRtx);
+
+            extern void adaptive_modcod_update_sr(uint32_t srKsps);
+            adaptive_modcod_update_sr((uint32_t)(m_SRtx / 4000));
 
             //m_sweep=PrepareSpan(WebfftRxFrequency,m_SRtx*fpgainterpol,WebfftRxSpan);
             BufferLentx = ((58192 / 8) + 8) * 2; // MAX BBFRAME LENGTH aligned 8
