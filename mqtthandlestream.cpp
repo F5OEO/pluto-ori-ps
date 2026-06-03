@@ -1439,6 +1439,11 @@ void SetTxMode(int Mode)
         m_txmode = tx_passtrough;
     fprintf(stderr, "Change txmode %d\n", m_txmode);
 
+    // Discard any stale TS packets left in the intermediate buffer from the
+    // previous mode — they would cause a CC discontinuity on the new stream.
+    extern void flush_ts_prebuf();
+    flush_ts_prebuf();
+
     uint32_t val = 0;
     int ret = iio_device_reg_read(m_tx, 0x80000088, &val);
     int timeout_ms = 1000;

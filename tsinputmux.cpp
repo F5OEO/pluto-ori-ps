@@ -33,6 +33,7 @@ using namespace std;
 //#define UDP_BUFF_MAX_BBFRAME (58192 / 8)
 #define UDP_BUFF_MAX_BBFRAME 8000
 
+void correctcc(uint8_t *tspacket, bool discountinuity);
 extern int m_Fecmode;
 enum
 {
@@ -109,7 +110,7 @@ uint8_t m_variable_ts_coderate;
 //  This gives the adaptive controller a direct measurement of what the input
 //  actually needs, independent of queue depth.
 // =============================================================================
-#define BITRATE_WINDOW_MS  500   // measurement window in ms
+#define BITRATE_WINDOW_MS  1000   // measurement window in ms
 
 class BitrateEstimator
 {
@@ -151,7 +152,13 @@ public:
         uint64_t nowMs = (uint64_t)now.tv_sec * 1000ULL + now.tv_nsec / 1000000ULL;
         uint64_t oldest = (m_head > 0) ? m_buckets[0].timeMs : nowMs;
         uint64_t spanMs = nowMs - oldest;
-        if (spanMs < 50) spanMs = 50; // avoid division by tiny interval at startup
+        // Always divide by at least the full window width. Using a 50ms floor
+        // caused 5-10x overestimation when the UDP socket buffer delivered many
+        // packets in a single burst: all bytes land in <10ms but the divisor
+        // was clamped to 50ms, not the 500ms over which those bytes should be
+        // amortised.  Using BITRATE_WINDOW_MS as the floor gives a conservative
+        // estimate that converges to the true rate after one full window.
+        if (spanMs < BITRATE_WINDOW_MS) spanMs = BITRATE_WINDOW_MS;
         return (uint32_t)((m_totalBytes * 8ULL * 1000ULL) / (spanMs * 1000ULL));
     }
 
@@ -219,7 +226,8 @@ static const int kFecCount = (int)(sizeof(kFecTable) / sizeof(kFecTable[0]));
 #define AMODCOD_UNDERFLOW_STEP        2       // step-down on underflow
 #define AMODCOD_UNDERFLOW_PENALTY_MS  1000    // base upgrade freeze after underflow
 #define AMODCOD_CEILING_RELAX_MS      30000   // ms of stability before ceiling rises +1
-#define AMODCOD_QUEUE_URGENT          20      // queue depth above which upgrade is immediate
+#define AMODCOD_QUEUE_URGENT          20      // queue depth above which upgrade jumps to ceiling
+#define AMODCOD_QUEUE_HOLD             5      // queue depth below which downgrade is allowed
 
 static int bitsPerSymbol(uint8_t constellation)
 {
@@ -323,19 +331,27 @@ public:
                     kFecTable[m_ceilingIdx].label);
         }
 
-        uint32_t R_kbps   = g_bitrateEstimator.getRateKbps();
+        uint32_t R_kbps = g_bitrateEstimator.getRateKbps();
+        // Cap at maximum link capacity: bursts above cap_max can't be served at
+        // any FEC rate, so asking for a higher-than-max target is meaningless and
+        // causes the ceiling-trap to fire in a tight loop printing the same message.
+        {
+            uint32_t cap_max = netCapacityKbps(AMODCOD_MAX_IDX);
+            if (R_kbps > cap_max) R_kbps = cap_max;
+        }
         uint32_t R_needed = (uint32_t)(R_kbps * (1.0f + AMODCOD_HEADROOM));
         int targetIdx     = findMinSufficientIdx(R_needed);
 
         if (targetIdx > m_ceilingIdx) targetIdx = m_ceilingIdx;
 
-        // Ceiling/floor trap: if ceiling == current and current is still insufficient,
-        // jump the ceiling directly to the minimum rate that can carry R_needed.
-        // A +1 step-up is too slow when the bitrate has spiked several steps above
-        // what the current ceiling provides.
+        // Ceiling/floor trap: if ceiling == current and current is still
+        // insufficient, jump the ceiling to the minimum sufficient rate.
+        // Guard: only fire when the ceiling can actually move — when already at
+        // AMODCOD_MAX_IDX the condition would otherwise repeat every BBframe.
         if (targetIdx == m_currentIdx
             && netCapacityKbps(m_currentIdx) < R_needed
             && m_ceilingIdx == m_currentIdx
+            && m_ceilingIdx < AMODCOD_MAX_IDX
             && !m_underflowPenaltyActive)
         {
             int minSuff = findMinSufficientIdx(R_needed);
@@ -347,14 +363,17 @@ public:
         }
 
         bool queueUrgent = ((int)queueDepth > AMODCOD_QUEUE_URGENT);
+        bool queueLoaded = ((int)queueDepth > AMODCOD_QUEUE_HOLD);
 
         bool doSwitch = false;
         if (targetIdx > m_currentIdx)
         {
             if (queueUrgent)
             {
-                // Queue is growing faster than the encoder can drain it.
-                // Upgrade immediately — skip confirm count and cooldown.
+                // Queue is overloaded — jump directly to the ceiling in one step
+                // instead of climbing one FEC index per BBframe.  This drains the
+                // backlog as fast as possible without the staircase overhead.
+                targetIdx = m_ceilingIdx;
                 doSwitch = true;
             }
             else if (!m_underflowPenaltyActive)
@@ -367,12 +386,19 @@ public:
                     doSwitch = true;
             }
         }
-        else if (targetIdx < m_currentIdx && R_kbps > 0 && cooldownExpired() && !queueUrgent)
+       else if (targetIdx < m_currentIdx && R_kbps > 0 && cooldownExpired()
+                 && !queueUrgent && !queueLoaded)
         {
             // Downgrade only when bitrate is real, cooldown elapsed, and the
-            // queue is not under pressure — prevents hunting on bursty streams.
+            // queue has drained (≤ AMODCOD_QUEUE_HOLD).
             m_upgradeConfirmCount = 0;
             m_pendingUpgradeIdx   = -1;
+            
+            // --- PATCH: Slew-Rate Limiter ---
+            // Instead of jumping directly to a low targetIdx, step down 
+            // by exactly ONE index per evaluation window.
+            targetIdx = m_currentIdx - 1; 
+            
             doSwitch = true;
         }
         else
@@ -479,6 +505,7 @@ struct TsEntry {
 static queue<TsEntry> g_ts_prebuf;
 static bool            g_bbframe_at_start  = true;
 static DVB2FrameFormat g_bbframe_active_fmt;
+static bool            g_ts_discontinuity  = false; // set after a BBframe queue purge
 
 static void prebuf_push(const uint8_t *src, bool isSdt)
 {
@@ -493,6 +520,8 @@ static void prebuf_push(const uint8_t *src, bool isSdt)
     g_ts_prebuf.push(e);
 }
 
+static void debug_ts_mirror_send(const uint8_t *pkt);
+
 static void encode_from_prebuf()
 {
     extern unsigned char getdvbs2modcod(uint FrameType, uint Constellation,
@@ -502,6 +531,14 @@ static void encode_from_prebuf()
     extern unsigned int BBFrameLenLut2[22];
     extern void      update_cont_counter(uint8_t *b);
     extern bool      addbbframe(uint8_t *bbframe, size_t len, size_t modcod);
+    extern size_t    m_SRtx;
+
+    // Accumulated PCR correction (27 MHz ticks) for null packets removed from
+    // the stream.  Each dropped 188-byte packet shortens the time before the
+    // next real packet is on air by delta = 188*8*27e6 / net_bps ticks, so the
+    // PCR of the next PCR-bearing packet must be decreased by that amount.
+    static int64_t pcr_drop_correction = 0;
+
     while (!g_ts_prebuf.empty())
     {
         if (g_bbframe_at_start)
@@ -519,9 +556,65 @@ static void encode_from_prebuf()
         TsEntry e = g_ts_prebuf.front();
         g_ts_prebuf.pop();
 
+        // Drop null packets here — they passed through ingestion for PCR
+        // correction but must not consume BBframe capacity.
+        if (GetPid((char *)e.pkt) == 0x1FFF)
+        {
+            // Compute net bitrate from the active BBframe format (always valid
+            // here — the modcod block above runs before any packet is touched).
+            int bps = bitsPerSymbol(g_bbframe_active_fmt.constellation);
+            int fec_idx = 0;
+            for (int k = 0; k < kFecCount; k++)
+                if (kFecTable[k].fec == g_bbframe_active_fmt.fec) { fec_idx = k; break; }
+            uint64_t net_bps = (uint64_t)(m_SRtx / 4) * bps
+                               * kFecTable[fec_idx].num / kFecTable[fec_idx].den;
+            if (net_bps > 0)
+                pcr_drop_correction -= (int64_t)188 * 8 * 27000000LL / (int64_t)net_bps;
+            continue;
+        }
+
+        // Apply accumulated PCR correction to the first subsequent packet that
+        // carries a PCR, then reset so we don't double-apply.
+        if (pcr_drop_correction != 0 && PCRAvailable((char *)e.pkt))
+        {
+            int64_t corrected = (int64_t)GetPCRFromPacket(e.pkt) + pcr_drop_correction;
+            if (corrected < 0) corrected = 0;
+            SetPacketPCR(e.pkt, (uint64_t)corrected);
+            pcr_drop_correction = 0;
+        }
+
+        // Stamp the continuity counter for stuffing packets at encoding time
+        // so the counter reflects what actually goes on air.  Also accumulate a
+        // positive PCR correction: inserting a stuffing packet pushes subsequent
+        // real packets one slot later, so the next PCR must be advanced by delta.
+        if (GetPid((char *)e.pkt) == 0x1FFE)
+        {
+            static uint8_t cc_stuffing = 0;
+            e.pkt[3] = (e.pkt[3] & 0xF0) | cc_stuffing;
+            cc_stuffing = (cc_stuffing + 1) & 0x0F;
+
+            int bps = bitsPerSymbol(g_bbframe_active_fmt.constellation);
+            int fec_idx = 0;
+            for (int k = 0; k < kFecCount; k++)
+                if (kFecTable[k].fec == g_bbframe_active_fmt.fec) { fec_idx = k; break; }
+            uint64_t net_bps = (uint64_t)(m_SRtx / 4) * bps
+                               * kFecTable[fec_idx].num / kFecTable[fec_idx].den;
+            if (net_bps > 0)
+                pcr_drop_correction += (int64_t)188 * 8 * 27000000LL / (int64_t)net_bps;
+        }
+
         if (e.isSdt)
             update_cont_counter(customsdt);
 
+        if (GetPid((char *)e.pkt) != 0x1FFF && GetPid((char *)e.pkt) != 0x1FFE)
+        {
+            // correctcc rewrites CC to maintain continuity; after a queue purge
+            // it also sets the discontinuity_indicator so the receiver knows
+            // data was intentionally skipped rather than counting it as an error.
+            correctcc(e.pkt, g_ts_discontinuity);
+            g_ts_discontinuity = false;
+        }
+        debug_ts_mirror_send(e.pkt);
         unsigned short *bbframeptr =
             (unsigned short *)dvbs2neon_packet(0, (uint32)(e.pkt), 0);
 
@@ -529,6 +622,26 @@ static void encode_from_prebuf()
         {
             unsigned short *p16      = (unsigned short *)bbframeptr;
             unsigned short ByteCount = p16[-1];
+
+            // Compute expected BBframe byte count from the active format so we
+            // can reject a stale or corrupted NEON output before it overflows
+            // the 8000-byte buffer in buffer_t.
+            int exp_fec_idx = 0;
+            for (int k = 0; k < kFecCount; k++)
+                if (kFecTable[k].fec == g_bbframe_active_fmt.fec) { exp_fec_idx = k; break; }
+            int exp_lut_idx = (g_bbframe_active_fmt.frame_type == FRAME_NORMAL)
+                              ? exp_fec_idx + 11 : exp_fec_idx;
+            uint16_t expected_bytes = (exp_lut_idx >= 0 &&
+                                       exp_lut_idx < (int)(sizeof(BBFrameLenLut2)/sizeof(BBFrameLenLut2[0])))
+                                      ? BBFrameLenLut2[exp_lut_idx] / 8 : 0;
+
+            if (ByteCount == 0 || ByteCount > UDP_BUFF_MAX_BBFRAME || ByteCount != expected_bytes)
+            {
+                fprintf(stderr, "encode_from_prebuf: bad BBframe size %u (expected %u) — discarding\n",
+                        ByteCount, expected_bytes);
+                g_bbframe_at_start = true;
+                continue;
+            }
 
             int i = 0;
             for (; i < (int)(sizeof(BBFrameLenLut2) / sizeof(BBFrameLenLut2[0])); i++)
@@ -541,7 +654,7 @@ static void encode_from_prebuf()
                 g_bbframe_active_fmt.fec,
                 g_bbframe_active_fmt.pilots);
 
-            m_variable_ts_coderate = coderate;
+            m_variable_ts_coderate = (coderate < kFecCount) ? coderate : 0;
             addbbframe((uint8_t *)bbframeptr, ByteCount, curmodcod);
 
             g_bbframe_at_start = true;
@@ -552,6 +665,13 @@ static void encode_from_prebuf()
 void adaptive_modcod_update_sr(uint32_t srKsps)
 {
     g_adaptiveModCod.init(fmt, srKsps);
+    g_bbframe_at_start = true;
+}
+
+void flush_ts_prebuf()
+{
+    while (!g_ts_prebuf.empty())
+        g_ts_prebuf.pop();
     g_bbframe_at_start = true;
 }
 
@@ -620,6 +740,7 @@ bool addbbframe(uint8_t *bbframe, size_t len, size_t modcod)
         // ceiling and force a step-down so the controller reacts immediately.
         if (m_Fecmode == fec_variable)
             g_adaptiveModCod.notifyUnderflow();
+        g_ts_discontinuity = true;
     }
 
     /*if (m_bbframe_queue.size() <= MAX_QUEUE_CHANGEMODCOD)
@@ -654,8 +775,8 @@ u_int16_t udp_init(char *ip, const char *iface, int rx) // interface to multicas
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &len, sizeof(len));
 
     struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
+    tv.tv_sec = 0;
+    tv.tv_usec = 10000; //10ms timeout
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 
     char text[40];
@@ -699,8 +820,47 @@ u_int16_t udp_init(char *ip, const char *iface, int rx) // interface to multicas
     {
         setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF, NULL, 0);
     }
-
+    int rcvbuf = 2*1024 * 1024; // 1 Megabyte buffer
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
     return sock;
+}
+
+// ── Debug TS mirror ───────────────────────────────────────────────────────────
+// Mirrors every TS packet entering the BBframe encoder to UDP multicast
+// 230.0.0.2:1234, batched into standard 7-packet (1316-byte) datagrams.
+// ─────────────────────────────────────────────────────────────────────────────
+#define DEBUG_TS_MCAST_IP   "230.0.0.2"
+#define DEBUG_TS_MCAST_PORT 1234
+#define DEBUG_TS_UDP_PKTS   7
+
+static int               g_debug_ts_sock  = -1;
+static struct sockaddr_in g_debug_ts_addr;
+static uint8_t           g_debug_ts_buf[188 * DEBUG_TS_UDP_PKTS];
+static int               g_debug_ts_count = 0;
+
+static void debug_ts_mirror_init(void)
+{
+    g_debug_ts_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (g_debug_ts_sock < 0) return;
+    unsigned char ttl = 1;
+    setsockopt(g_debug_ts_sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
+    memset(&g_debug_ts_addr, 0, sizeof(g_debug_ts_addr));
+    g_debug_ts_addr.sin_family      = AF_INET;
+    g_debug_ts_addr.sin_addr.s_addr = inet_addr(DEBUG_TS_MCAST_IP);
+    g_debug_ts_addr.sin_port        = htons(DEBUG_TS_MCAST_PORT);
+}
+
+static void debug_ts_mirror_send(const uint8_t *pkt)
+{
+    if (g_debug_ts_sock < 0) debug_ts_mirror_init();
+    if (g_debug_ts_sock < 0) return;
+    memcpy(g_debug_ts_buf + g_debug_ts_count * 188, pkt, 188);
+    if (++g_debug_ts_count >= DEBUG_TS_UDP_PKTS)
+    {
+        sendto(g_debug_ts_sock, g_debug_ts_buf, sizeof(g_debug_ts_buf), 0,
+               (struct sockaddr *)&g_debug_ts_addr, sizeof(g_debug_ts_addr));
+        g_debug_ts_count = 0;
+    }
 }
 
 #define CRC_POLYR 0xD5
@@ -774,10 +934,19 @@ void correctcc(uint8_t *tspacket, bool discountinuity)
         }
         else
         {
-            if (((tspacket[3] & 0x30) == 0x10) || ((tspacket[3] & 0x30) == 0x30))
+            uint8_t afc = tspacket[3] & 0x30;
+            if (afc == 0x10 || afc == 0x30)
+            {
                 pid_cc_table[pid] = (pid_cc_table[pid] + 1) % 0x10;
-            else
-                tspacket[5] = (discountinuity) ? (tspacket[5] & 0x7F) | 0x8 : tspacket[5];
+                // adaptation+payload: adaptation field present, set discontinuity_indicator
+                if (discountinuity && afc == 0x30 && tspacket[4] > 0)
+                    tspacket[5] |= 0x80;
+            }
+            else // adaptation-only (0x20) or reserved (0x00)
+            {
+                if (discountinuity && tspacket[4] > 0)
+                    tspacket[5] |= 0x80;
+            }
             // fprintf(stderr, "pid %d cc %d\n", pid,pid_cc_table[pid]);
         }
 
@@ -802,37 +971,31 @@ void addneonts(uint8_t *tspacket, size_t length)
         if (cur_packet[0] != 0x47)
         {
             fprintf(stderr, "Ts input error aligned %x\n", cur_packet[0]);
-            return;
+            break;   // skip the rest of this batch but still encode what was already buffered
         }
 
-        // In variable-FEC mode strip incoming null packets (0x1FFF); they only
-        // dilute the bitrate measurement and waste BBframe capacity.
-        if (m_Fecmode == fec_variable && GetPid((char *)cur_packet) == 0x1FFF)
-            continue;
-
-        // Count only real content — exclude internal stuffing packets (0x1FFE,
-        // injected by setpaddingts when the queue is empty). Counting them would
-        // inflate the bitrate estimate, causing the algorithm to pick a higher
-        // code rate, which in turn needs more stuffing — a feedback loop that
-        // results in permanently elevated null-packet overhead.
-        if (GetPid((char *)cur_packet) != 0x1FFE)
+        // Count only real content: exclude null packets (0x1FFF) and internal
+        // stuffing (0x1FFE from setpaddingts). Both are still buffered and PCR-
+        // corrected; nulls are dropped at the encoder boundary in encode_from_prebuf.
+        if (GetPid((char *)cur_packet) != 0x1FFF && GetPid((char *)cur_packet) != 0x1FFE)
             g_bitrateEstimator.addBytes(188);
-        ProcessCorectPCR(cur_packet, 188);
+        //ProcessCorectPCR(cur_packet, 188); //Will be later
 
         if (GetPid((char *)cur_packet) == 0x11)
         {
             // SDT: buffer the replacement packet; counter update deferred to encode phase
             prebuf_push(customsdt, true);
         }
+        /*
         else if (GetPid((char *)cur_packet) == 0x1FFF)
         {
             prebuf_push(customnullpacket, false);
-        }
+        }*/
         else
         {
-            size_t piderror = InspectCC(cur_packet, 188);
+            /*size_t piderror = InspectCC(cur_packet, 188);
             if (piderror != 8192)
-                Lastpidccerror = piderror;
+                Lastpidccerror = piderror;*/
             prebuf_push(cur_packet, false);
         }
     }
@@ -905,13 +1068,14 @@ void adddvbsts(uint8_t *tspacket, size_t length)
         {
             // bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customsdt), 0);
             adddvbsframe(customsdt);
-           
             update_cont_counter(customsdt);
+            debug_ts_mirror_send(customsdt);
         }
         else if (GetPid((char *)cur_packet) == 0x1FFF)
         {
             adddvbsframe(customnullpacket);
             // bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(customnullpacket), 0);
+            debug_ts_mirror_send(customnullpacket);
         }
         else
         {
@@ -920,6 +1084,7 @@ void adddvbsts(uint8_t *tspacket, size_t length)
                 Lastpidccerror = piderror;
             adddvbsframe(cur_packet);
             // bbframeptr = (unsigned short *) dvbs2neon_packet(0, (uint32)(cur_packet), 0);
+            debug_ts_mirror_send(cur_packet);
         }
         cur_packet += 188;
        
@@ -929,7 +1094,13 @@ void adddvbsts(uint8_t *tspacket, size_t length)
 void addts(uint8_t *tspacket, size_t length)
 {
     static unsigned char bbframe[MAX_BBFRAME];
-    uint16_t framebytes = BBFrameLenLut2[m_ModeCod] / 8; // Need to set it by modcod
+    // BBFrameLenLut2 layout: indices 0-10 = short-frame DFLs (C1/4..C9/10),
+    // indices 11-21 = long-frame DFLs.  longframe=0 must add 11 to reach the
+    // long-frame half of the table; shortframe=1 uses the short-frame half directly.
+    int bbfLutIdx = (fmt.frame_type == FRAME_NORMAL) ? (m_ModeCod + 11) : m_ModeCod;
+    if (bbfLutIdx < 0 || bbfLutIdx >= (int)(sizeof(BBFrameLenLut2)/sizeof(BBFrameLenLut2[0])))
+        bbfLutIdx = 16; // safe fallback: long C2/3
+    uint16_t framebytes = BBFrameLenLut2[bbfLutIdx] / 8;
     static uint16_t avail = framebytes - 10;
     static uint8_t lastcrc = 0;
     struct bbheader *header = (struct bbheader *)bbframe;
@@ -1306,16 +1477,9 @@ void settssource(int tssource, char *arg, uint tsbitrate)
 
 void setpaddingts()
 {
-    static unsigned char NullPacket[7 * 188] = {0x47, 0x1F, 0xFE, 0x10, 'F', '5', 'O', 'E', 'O'};
-    static unsigned char cc = 0;
-    for (int k = 0; k < 1; k++)
-    {
-        memcpy(NullPacket + k * 188, NullPacket, 9);
-        NullPacket[3 + k * 188] = 0x10 + cc;
-        cc = (cc + 1) % 16;
-        for (int i = 9; i < 188; i++)
-            NullPacket[i + k * 188] = i;
-    }
+    static unsigned char NullPacket[188] = {0x47, 0x1F, 0xFE, 0x10, 'F', '5', 'O', 'E', 'O'};
+    for (int i = 9; i < 188; i++)
+        NullPacket[i] = i;
     pthread_mutex_lock(&buffer_mutexts);
 
     if(m_txmode == tx_dvbs2_ts)
