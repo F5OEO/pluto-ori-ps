@@ -155,6 +155,7 @@ struct app {
      * for writes and wsi_tx for the same connection (set to the same wsi). */
     atomic_uintptr_t     wsi_rx;     /* (struct lws *) ADC→WS client */
     atomic_uintptr_t     wsi_tx;     /* (struct lws *) WS→DAC client */
+    atomic_bool          tx_flow_paused; /* lws RX flow disabled on wsi_tx (ring full) */
 
     /* IIO→WS ring (producer: rx_thread, consumer: ws_cb writeable) */
     struct ring rx_ring;
@@ -295,6 +296,10 @@ static void *tx_thread(void *arg)
         if (copy < a->buf_bytes)
             memset(dst + copy, 0, a->buf_bytes - copy);
         ring_read_end(&a->tx_ring);
+        /* If WS receive was paused due to a full ring, wake the lws loop so it
+         * can re-enable flow control now that a slot is free. */
+        if (atomic_load_explicit(&a->tx_flow_paused, memory_order_acquire))
+            lws_cancel_service(a->lws);
 
         ssize_t n = iio_buffer_push(a->tx_buf);
         if (n < 0 && a->running)
@@ -344,6 +349,8 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
             }
             A.tx_fill_slot = NULL;
             A.tx_fill_len  = 0;
+            atomic_store_explicit(&A.tx_flow_paused, false, memory_order_release);
+            lws_rx_flow_control(wsi, 1); /* ensure receive is enabled */
             atomic_store_explicit(&A.wsi_tx, (uintptr_t)wsi, memory_order_release);
         }
         fprintf(stderr, "[ws] client connected (%s)\n", proto);
@@ -362,6 +369,7 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
             /* Abandon uncommitted ring slot — it stays invisible to tx_thread */
             A.tx_fill_slot = NULL;
             A.tx_fill_len  = 0;
+            atomic_store_explicit(&A.tx_flow_paused, false, memory_order_release);
             fprintf(stderr, "[ws] TX client disconnected\n");
         }
         break;
@@ -393,11 +401,19 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
         size_t remaining = len;
 
         /* At a buffer boundary with no open slot, try to claim one now.
-         * If ring is full we enter drop-mode for this buffer: bytes are
-         * counted but not stored, preserving IQ stream alignment so the
-         * next slot starts on a clean buf_bytes boundary. */
-        if (!A.tx_fill_slot && A.tx_fill_len == 0)
+         * If the ring is full: pause WS receive (TCP back-pressure propagates to
+         * the client) instead of dropping.  tx_thread calls lws_cancel_service
+         * when it frees a slot; the main loop then re-enables flow. */
+        if (!A.tx_fill_slot && A.tx_fill_len == 0) {
             A.tx_fill_slot = ring_write_begin(&A.tx_ring);
+            if (!A.tx_fill_slot) {
+                atomic_store_explicit(&A.tx_flow_paused, true, memory_order_release);
+                lws_rx_flow_control(wsi, 0);
+                /* Flow is paused: lws won't deliver more frames until re-enabled.
+                 * Fall through to the loop below so remaining bytes from this
+                 * frame are counted toward alignment (drop-mode, no memcpy). */
+            }
+        }
 
         while (remaining > 0) {
             size_t space = A.buf_bytes - A.tx_fill_len;
@@ -417,9 +433,14 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
                     A.tx_fill_slot->len = A.buf_bytes;
                     ring_write_end(&A.tx_ring);
                 }
-                /* Try to claim the next slot immediately; drop-mode if ring still full */
+                /* Claim next slot; pause flow if ring is now full */
                 A.tx_fill_slot = ring_write_begin(&A.tx_ring);
                 A.tx_fill_len  = 0;
+                if (!A.tx_fill_slot) {
+                    atomic_store_explicit(&A.tx_flow_paused, true, memory_order_release);
+                    lws_rx_flow_control(wsi, 0);
+                    break;
+                }
             }
         }
         break;
@@ -609,6 +630,7 @@ int main(int argc, char **argv)
     A.running = true;
     atomic_init(&A.wsi_rx, (uintptr_t)NULL);
     atomic_init(&A.wsi_tx, (uintptr_t)NULL);
+    atomic_init(&A.tx_flow_paused, false);
     if (A.do_rx) pthread_create(&A.rx_tid, NULL, rx_thread, &A);
     if (A.do_tx) pthread_create(&A.tx_tid, NULL, tx_thread, &A);
 
@@ -626,6 +648,17 @@ int main(int argc, char **argv)
                                     &A.wsi_rx, memory_order_acquire);
             if (wsi && ring_has_data(&A.rx_ring))
                 lws_callback_on_writable(wsi);
+        }
+
+        /* Re-enable WS receive for the TX client once the ring has a free slot.
+         * tx_thread called lws_cancel_service() to wake us here. */
+        if (A.do_tx && atomic_load_explicit(&A.tx_flow_paused, memory_order_acquire)) {
+            struct lws *wsi_tx = (struct lws *)atomic_load_explicit(
+                                        &A.wsi_tx, memory_order_acquire);
+            if (wsi_tx && ring_write_begin(&A.tx_ring) != NULL) {
+                atomic_store_explicit(&A.tx_flow_paused, false, memory_order_release);
+                lws_rx_flow_control(wsi_tx, 1);
+            }
         }
 
         if (A.stats) show_stats();
