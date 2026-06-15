@@ -150,15 +150,21 @@ struct app {
 
     /* WebSocket */
     struct lws_context  *lws;
-    atomic_uintptr_t     wsi;        /* (struct lws *) single active client */
+    /* Separate slots for the two directions so an iio-rx recorder and an
+     * iio-tx player can be connected simultaneously.  iio-iq uses wsi_rx
+     * for writes and wsi_tx for the same connection (set to the same wsi). */
+    atomic_uintptr_t     wsi_rx;     /* (struct lws *) ADC→WS client */
+    atomic_uintptr_t     wsi_tx;     /* (struct lws *) WS→DAC client */
 
     /* IIO→WS ring (producer: rx_thread, consumer: ws_cb writeable) */
     struct ring rx_ring;
     /* WS→IIO ring (producer: ws_cb receive, consumer: tx_thread) */
     struct ring tx_ring;
-    /* Assembly buffer: accumulates WS fragments into IIO-buffer-sized chunks */
-    uint8_t    *tx_assem;
-    size_t      tx_assem_len;
+    /* TX accumulation: fill directly into the current ring slot.
+     * Eliminates the tx_assem intermediate buffer and one memcpy.
+     * tx_fill_slot is NULL while no slot is open (between commits). */
+    struct slot *tx_fill_slot;
+    size_t       tx_fill_len;
 
     /* Worker threads */
     pthread_t   rx_tid;
@@ -170,6 +176,8 @@ struct app {
     /* Stats counters */
     atomic_uint_fast64_t rx_bytes;
     atomic_uint_fast64_t tx_bytes;
+    atomic_uint_fast64_t tx_drop;    /* bytes dropped (ring full or no client) */
+    atomic_uint_fast64_t tx_under;   /* underrun events (ring empty at push time) */
 };
 
 static struct app A;
@@ -246,8 +254,8 @@ static void *rx_thread(void *arg)
             break;
         }
 
-        if (!atomic_load_explicit(&a->wsi, memory_order_acquire))
-            continue;   /* no client, discard */
+        if (!atomic_load_explicit(&a->wsi_rx, memory_order_acquire))
+            continue;   /* no RX client, discard */
 
         struct slot *sl = ring_write_begin(&a->rx_ring);
         if (!sl) continue;   /* ring full, drop */
@@ -276,6 +284,7 @@ static void *tx_thread(void *arg)
     while (a->running) {
         struct slot *sl = ring_read_begin(&a->tx_ring);
         if (!sl) {
+            atomic_fetch_add_explicit(&a->tx_under, 1, memory_order_relaxed);
             usleep(200);
             continue;
         }
@@ -304,30 +313,63 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
 {
     (void)user;
 
+    /* lws_get_protocol() returns NULL for pre-handshake internal callbacks
+     * (HTTP upgrade, WSI_CREATE, FILTER_PROTOCOL_CONNECTION, etc.).
+     * Return immediately for anything that doesn't yet have a protocol. */
+    const struct lws_protocols *lws_proto = lws_get_protocol(wsi);
+    if (!lws_proto) return 0;
+    const char *proto = lws_proto->name;
+    bool is_rx = A.do_rx && (strcmp(proto, "iio-rx") == 0 || strcmp(proto, "iio-iq") == 0);
+    bool is_tx = A.do_tx && (strcmp(proto, "iio-tx") == 0 || strcmp(proto, "iio-iq") == 0);
+
     switch (reason) {
 
     case LWS_CALLBACK_ESTABLISHED: {
-        struct lws *existing = (struct lws *)atomic_load_explicit(&A.wsi,
-                                                                   memory_order_acquire);
-        if (existing) {
-            fprintf(stderr, "[ws] rejecting second client\n");
-            return -1;
+        if (is_rx) {
+            struct lws *ex = (struct lws *)atomic_load_explicit(&A.wsi_rx, memory_order_acquire);
+            if (ex) {
+                fprintf(stderr, "[ws] rejecting second RX client (%s)\n", proto);
+                return -1;
+            }
+            atomic_store_explicit(&A.wsi_rx, (uintptr_t)wsi, memory_order_release);
         }
-        fprintf(stderr, "[ws] client connected\n");
-        A.tx_assem_len = 0;
-        atomic_store_explicit(&A.wsi, (uintptr_t)wsi, memory_order_release);
-        if (A.do_rx)
+        if (is_tx) {
+            struct lws *ex = (struct lws *)atomic_load_explicit(&A.wsi_tx, memory_order_acquire);
+            if (ex) {
+                fprintf(stderr, "[ws] rejecting second TX client (%s)\n", proto);
+                /* Roll back RX slot we may have just claimed for iio-iq */
+                if (is_rx)
+                    atomic_store_explicit(&A.wsi_rx, (uintptr_t)NULL, memory_order_release);
+                return -1;
+            }
+            A.tx_fill_slot = NULL;
+            A.tx_fill_len  = 0;
+            atomic_store_explicit(&A.wsi_tx, (uintptr_t)wsi, memory_order_release);
+        }
+        fprintf(stderr, "[ws] client connected (%s)\n", proto);
+        if (is_rx)
             lws_callback_on_writable(wsi);
         break;
     }
 
     case LWS_CALLBACK_CLOSED:
-        fprintf(stderr, "[ws] client disconnected\n");
-        atomic_store_explicit(&A.wsi, (uintptr_t)NULL, memory_order_release);
-        A.tx_assem_len = 0;
+        if (atomic_load_explicit(&A.wsi_rx, memory_order_acquire) == (uintptr_t)wsi) {
+            atomic_store_explicit(&A.wsi_rx, (uintptr_t)NULL, memory_order_release);
+            fprintf(stderr, "[ws] RX client disconnected\n");
+        }
+        if (atomic_load_explicit(&A.wsi_tx, memory_order_acquire) == (uintptr_t)wsi) {
+            atomic_store_explicit(&A.wsi_tx, (uintptr_t)NULL, memory_order_release);
+            /* Abandon uncommitted ring slot — it stays invisible to tx_thread */
+            A.tx_fill_slot = NULL;
+            A.tx_fill_len  = 0;
+            fprintf(stderr, "[ws] TX client disconnected\n");
+        }
         break;
 
     case LWS_CALLBACK_SERVER_WRITEABLE: {
+        /* Only serve writes if this wsi is the registered RX sender */
+        if (atomic_load_explicit(&A.wsi_rx, memory_order_acquire) != (uintptr_t)wsi)
+            break;
         struct slot *sl = ring_read_begin(&A.rx_ring);
         if (!sl) break;
 
@@ -342,28 +384,42 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
     }
 
     case LWS_CALLBACK_RECEIVE: {
-        if (!A.do_tx || !len) break;
+        /* Only handle data from the registered TX receiver */
+        if (atomic_load_explicit(&A.wsi_tx, memory_order_acquire) != (uintptr_t)wsi)
+            break;
+        if (!len) break;
 
         const uint8_t *src = in;
         size_t remaining = len;
 
-        while (remaining > 0) {
-            size_t space = A.buf_bytes - A.tx_assem_len;
-            size_t chunk = remaining < space ? remaining : space;
-            memcpy(A.tx_assem + A.tx_assem_len, src, chunk);
-            A.tx_assem_len += chunk;
-            src            += chunk;
-            remaining      -= chunk;
+        /* At a buffer boundary with no open slot, try to claim one now.
+         * If ring is full we enter drop-mode for this buffer: bytes are
+         * counted but not stored, preserving IQ stream alignment so the
+         * next slot starts on a clean buf_bytes boundary. */
+        if (!A.tx_fill_slot && A.tx_fill_len == 0)
+            A.tx_fill_slot = ring_write_begin(&A.tx_ring);
 
-            if (A.tx_assem_len >= A.buf_bytes) {
-                struct slot *sl = ring_write_begin(&A.tx_ring);
-                if (sl) {
-                    memcpy(sl->buf, A.tx_assem, A.buf_bytes);
-                    sl->len = A.buf_bytes;
+        while (remaining > 0) {
+            size_t space = A.buf_bytes - A.tx_fill_len;
+            size_t chunk = remaining < space ? remaining : space;
+
+            if (A.tx_fill_slot)
+                memcpy(A.tx_fill_slot->buf + A.tx_fill_len, src, chunk);
+            else
+                atomic_fetch_add_explicit(&A.tx_drop, chunk, memory_order_relaxed);
+
+            A.tx_fill_len += chunk;
+            src           += chunk;
+            remaining     -= chunk;
+
+            if (A.tx_fill_len >= A.buf_bytes) {
+                if (A.tx_fill_slot) {
+                    A.tx_fill_slot->len = A.buf_bytes;
                     ring_write_end(&A.tx_ring);
                 }
-                /* else ring full: drop this IIO buffer */
-                A.tx_assem_len = 0;
+                /* Try to claim the next slot immediately; drop-mode if ring still full */
+                A.tx_fill_slot = ring_write_begin(&A.tx_ring);
+                A.tx_fill_len  = 0;
             }
         }
         break;
@@ -390,7 +446,7 @@ static struct lws_protocols protocols[] = {
 /* ------------------------------------------------------------------ */
 static void show_stats(void)
 {
-    static uint64_t prx, ptx;
+    static uint64_t prx, ptx, pdrop, punder;
     static time_t   pt;
 
     time_t now = time(NULL);
@@ -398,13 +454,18 @@ static void show_stats(void)
     double dt = difftime(now, pt);
     if (dt < 1.0) return;
 
-    uint64_t rx = (uint64_t)atomic_load_explicit(&A.rx_bytes, memory_order_relaxed);
-    uint64_t tx = (uint64_t)atomic_load_explicit(&A.tx_bytes, memory_order_relaxed);
+    uint64_t rx    = (uint64_t)atomic_load_explicit(&A.rx_bytes, memory_order_relaxed);
+    uint64_t tx    = (uint64_t)atomic_load_explicit(&A.tx_bytes, memory_order_relaxed);
+    uint64_t drop  = (uint64_t)atomic_load_explicit(&A.tx_drop,  memory_order_relaxed);
+    uint64_t under = (uint64_t)atomic_load_explicit(&A.tx_under, memory_order_relaxed);
 
-    fprintf(stderr, "stats: RX %.2f MB/s  TX %.2f MB/s\n",
-            (double)(rx - prx) / dt / 1e6,
-            (double)(tx - ptx) / dt / 1e6);
-    prx = rx; ptx = tx; pt = now;
+    fprintf(stderr,
+            "stats: RX %.2f MB/s  TX %.2f MB/s  TX-drop %.2f MB/s  TX-under %.0f/s\n",
+            (double)(rx    - prx)   / dt / 1e6,
+            (double)(tx    - ptx)   / dt / 1e6,
+            (double)(drop  - pdrop) / dt / 1e6,
+            (double)(under - punder) / dt);
+    prx = rx; ptx = tx; pdrop = drop; punder = under; pt = now;
 }
 
 /* ------------------------------------------------------------------ */
@@ -520,9 +581,7 @@ int main(int argc, char **argv)
         if (ring_init(&A.tx_ring, A.buf_bytes) < 0) {
             fprintf(stderr, "tx ring alloc failed\n"); return 1;
         }
-        A.tx_assem = malloc(A.buf_bytes);
-        if (!A.tx_assem) { fprintf(stderr, "tx_assem malloc failed\n"); return 1; }
-        A.tx_assem_len = 0;
+        /* tx_fill_slot/tx_fill_len are reset in LWS_CALLBACK_ESTABLISHED */
     }
 
     /* ---- WebSocket ---- */
@@ -548,7 +607,8 @@ int main(int argc, char **argv)
 
     /* ---- Start worker threads ---- */
     A.running = true;
-    atomic_init(&A.wsi, (uintptr_t)NULL);
+    atomic_init(&A.wsi_rx, (uintptr_t)NULL);
+    atomic_init(&A.wsi_tx, (uintptr_t)NULL);
     if (A.do_rx) pthread_create(&A.rx_tid, NULL, rx_thread, &A);
     if (A.do_tx) pthread_create(&A.tx_tid, NULL, tx_thread, &A);
 
@@ -563,7 +623,7 @@ int main(int argc, char **argv)
          * LWS_CALLBACK_CLOSED the atomic store of NULL is already visible). */
         if (A.do_rx) {
             struct lws *wsi = (struct lws *)atomic_load_explicit(
-                                    &A.wsi, memory_order_acquire);
+                                    &A.wsi_rx, memory_order_acquire);
             if (wsi && ring_has_data(&A.rx_ring))
                 lws_callback_on_writable(wsi);
         }
@@ -581,7 +641,7 @@ int main(int argc, char **argv)
     if (A.tx_buf) iio_buffer_destroy(A.tx_buf);
     iio_context_destroy(A.iio);
     if (A.do_rx) ring_destroy(&A.rx_ring);
-    if (A.do_tx) { ring_destroy(&A.tx_ring); free(A.tx_assem); }
+    if (A.do_tx) ring_destroy(&A.tx_ring);
 
     return 0;
 }
