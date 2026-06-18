@@ -556,6 +556,7 @@ static void encode_from_prebuf()
         TsEntry e = g_ts_prebuf.front();
         g_ts_prebuf.pop();
 
+        #ifdef WITH_PCR
         // Drop null packets here — they passed through ingestion for PCR
         // correction but must not consume BBframe capacity.
         if (GetPid((char *)e.pkt) == 0x1FFF)
@@ -602,7 +603,7 @@ static void encode_from_prebuf()
             if (net_bps > 0)
                 pcr_drop_correction += (int64_t)188 * 8 * 27000000LL / (int64_t)net_bps;
         }
-
+        
         if (e.isSdt)
             update_cont_counter(customsdt);
 
@@ -614,6 +615,7 @@ static void encode_from_prebuf()
             correctcc(e.pkt, g_ts_discontinuity);
             g_ts_discontinuity = false;
         }
+        #endif
         debug_ts_mirror_send(e.pkt);
         unsigned short *bbframeptr =
             (unsigned short *)dvbs2neon_packet(0, (uint32)(e.pkt), 0);
@@ -1292,16 +1294,26 @@ int GetTsBitrate()
     return TsBitrate;
 }
 
+// Returns true when the UDP receive socket has at least one TS packet pending.
+// Called from the TX thread before deciding to insert a stuffing packet.
+bool ts_udp_data_pending()
+{
+    if (m_tssource != tssource_udp) return false;
+    int avail = 0;
+    ioctl(recv_ts_sock, FIONREAD, &avail);
+    return avail >= 188;
+}
+
 void *rx_ts_thread(void *arg)
 {
-    unsigned char tspacket[7 * 188 * 10];
+    unsigned char tspacket[7 * 188];
 
     int length = 0;
 
     while (true)
     {
         if (m_tssource == tssource_udp)
-            length = udp_receive(recv_ts_sock, tspacket, 7 * 188);
+            length = udp_receive(recv_ts_sock, tspacket, sizeof(tspacket));
 
         if ((m_tssource == tssource_file) || (m_tssource == tssource_pattern))
         {
@@ -1317,8 +1329,7 @@ void *rx_ts_thread(void *arg)
             }
             if (m_bbframe_queue.size() < 10)
             {
-                length = fread(tspacket, 1, 7 * 188, fdtsinput);
-                // usleep(m_LatencySevenPacket * 1000);
+                length = fread(tspacket, 1, sizeof(tspacket), fdtsinput);
             }
             else
             {
@@ -1326,30 +1337,33 @@ void *rx_ts_thread(void *arg)
                 continue;
             }
         }
-        /*
-        int udpsize=0;
-        ioctl(recv_ts_sock, FIONREAD, &udpsize);
-        while(udpsize>0)
-        {
-            length += udp_receive(recv_ts_sock, tspacket+length, 7*188);
-            ioctl(recv_ts_sock, FIONREAD, &udpsize);
-        }
-        */
 
-        // fprintf(stderr,"Udp %d / %d\n",length,udpsize);
         if (length > 0)
         {
             pthread_mutex_lock(&buffer_mutexts);
             if (m_txmode == tx_dvbs2_ts)
-            {
                 addneonts(tspacket, length);
-            }
             if (m_txmode == tx_dvbs)
-            {
-                
                 adddvbsts(tspacket, length);
-            }
             pthread_mutex_unlock(&buffer_mutexts);
+
+            // Drain any additional UDP datagrams that queued up while we held
+            // the mutex or were processing.  Each extra datagram is processed
+            // individually to avoid any buffer-size constraint.
+            if (m_tssource == tssource_udp)
+            {
+                unsigned char extra[7 * 188];
+                ssize_t extra_len;
+                while ((extra_len = recv(recv_ts_sock, extra, sizeof(extra), MSG_DONTWAIT)) > 0)
+                {
+                    pthread_mutex_lock(&buffer_mutexts);
+                    if (m_txmode == tx_dvbs2_ts)
+                        addneonts(extra, (int)extra_len);
+                    if (m_txmode == tx_dvbs)
+                        adddvbsts(extra, (int)extra_len);
+                    pthread_mutex_unlock(&buffer_mutexts);
+                }
+            }
         }
     }
 }
