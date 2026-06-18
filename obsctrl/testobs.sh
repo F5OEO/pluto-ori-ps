@@ -1,1 +1,1 @@
-./obs_stream_control -b 6000 -m record --rec-bitrate 300  -e libx264  -g 50  -u "udp://230.0.0.5:1000" -H 10.0.0.54 -w tezukadvb
+./obs_stream_control -m record -f mpegts -u "udp://230.0.0.5:10000?pkt_size=1316" --ff-mcustom "muxrate=1000000 muxdelay=1.5" -e libx264 --rec-bitrate 500 --aencoder aac --rec-abitrate 16 --ff-custom "minrate=500k maxrate=500k bufsize=1000k" -H 10.0.0.54 -w tezukadvb
