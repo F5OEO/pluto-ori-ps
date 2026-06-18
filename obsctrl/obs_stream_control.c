@@ -33,7 +33,11 @@
  *   FFURL                      AdvOut / FFURL                  -u / --url
  *   FFVGOPSize                 AdvOut / FFVGOPSize             -g / --gop
  *   FFOutputToFile             AdvOut / FFOutputToFile         --to-file
+ *   FFRescale                  AdvOut / FFRescale              (auto avec --rescale)
  *   FFRescaleRes               AdvOut / FFRescaleRes           --rescale
+ *   FFSamplingRate             AdvOut / FFSamplingRate         --sample-rate
+ *   FFIgnoreCompat             AdvOut / FFIgnoreCompat         --ignore-compat
+ *   FFAudioMixes               AdvOut / FFAudioMixes           --audio-mixes
  *
  *   Stream (mode Avancé) :
  *   Encoder bitrate            AdvOut / Encoder (+ settings)
@@ -593,8 +597,11 @@ static void usage(const char *prog)
     "  --ff-custom <str>  FFVCustom   - params encodeur vidéo FFmpeg\n"
     "  --ff-acustom <str> FFACustom   - params encodeur audio FFmpeg\n"
     "  --ff-mcustom <str> FFMCustom   - params muxer FFmpeg\n"
-    "  --rescale <WxH>    FFRescaleRes - résolution de rescale\n"
-    "  --to-file <bool>   FFOutputToFile - true/false\n\n"
+    "  --rescale <WxH>    FFRescaleRes   - résolution de rescale (active aussi FFRescale)\n"
+    "  --to-file <bool>   FFOutputToFile - true/false\n"
+    "  --sample-rate <n>  FFSamplingRate - fréquence audio (ex: 22050, 44100, 48000)\n"
+    "  --ignore-compat <b> FFIgnoreCompat - ignorer compat format (true/false)\n"
+    "  --audio-mixes <n>  FFAudioMixes   - masque pistes audio (1=piste1, 2=piste2…)\n\n"
     "Exemples:\n"
     "  %s -m stream -b 6000\n"
     "  %s -m record --rec-bitrate 4500 -e hevc_nvenc -f mpegts\n"
@@ -622,6 +629,9 @@ int main(int argc, char **argv)
         {"ff-mcustom",   required_argument, 0, 'M'},
         {"rescale",      required_argument, 0, 'S'},
         {"to-file",      required_argument, 0, 'T'},
+        {"sample-rate",  required_argument, 0, 'r'},
+        {"ignore-compat",required_argument, 0, 'I'},
+        {"audio-mixes",  required_argument, 0, 'X'},
         {"help",         no_argument,       0, '?'},
         {0, 0, 0, 0}
     };
@@ -692,11 +702,25 @@ int main(int argc, char **argv)
             break;
         case 'S':
             param_append(&g_session.config.rec_params,
+                         param_new("AdvOut", "FFRescale", "true"));
+            param_append(&g_session.config.rec_params,
                          param_new("AdvOut", "FFRescaleRes", optarg));
             break;
         case 'T':
             param_append(&g_session.config.rec_params,
                          param_new("AdvOut", "FFOutputToFile", optarg));
+            break;
+        case 'r':
+            param_append(&g_session.config.rec_params,
+                         param_new("AdvOut", "FFSamplingRate", optarg));
+            break;
+        case 'I':
+            param_append(&g_session.config.rec_params,
+                         param_new("AdvOut", "FFIgnoreCompat", optarg));
+            break;
+        case 'X':
+            param_append(&g_session.config.rec_params,
+                         param_new("AdvOut", "FFAudioMixes", optarg));
             break;
 
         case '?':
