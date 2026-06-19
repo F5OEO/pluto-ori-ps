@@ -70,7 +70,7 @@ MQTT_HOST="${1:-${MQTT_HOST:-localhost}}"
 MQTT_PORT="${2:-${MQTT_PORT:-1883}}"
 MQTT_TOPIC="cmd/encoder"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-OBS_CTRL="$SCRIPT_DIR/obs_stream_control"
+OBS_CTRL="$(command -v obs_stream_control 2>/dev/null || echo "$SCRIPT_DIR/obs_stream_control")"
 
 echo "[mqtt_obs_ctrl] Listening on mqtt://$MQTT_HOST:$MQTT_PORT/$MQTT_TOPIC"
 

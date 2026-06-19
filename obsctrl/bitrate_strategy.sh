@@ -98,7 +98,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
     encoder=$(jq_get '.encoder'); [ -z "$encoder" ]  && encoder="libx264"
 
     # ── Build output JSON ─────────────────────────────────────────────────
-    payload=$(jq -n \
+    payload=$(jq -cn \
         --arg  host         "$host"       \
         --argjson port      "$port"       \
         --arg  password     "$password"   \
