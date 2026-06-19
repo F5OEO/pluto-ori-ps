@@ -39,6 +39,11 @@
  *   FFIgnoreCompat             AdvOut / FFIgnoreCompat         --ignore-compat
  *   FFAudioMixes               AdvOut / FFAudioMixes           --audio-mixes
  *
+ *   basic.ini [Video]          websocket category/name        option CLI
+ *   ─────────────────────────────────────────────────────────────────────
+ *   FPSType                    Video / FPSType                 (auto avec --fps)
+ *   FPSInt                     Video / FPSInt                  --fps
+ *
  *   Stream (mode Avancé) :
  *   VBitrate simplifié via     SimpleOutput / VBitrate         -b / --bitrate
  */
@@ -83,6 +88,7 @@ typedef struct {
     control_mode_t  mode;
     param_change_t *stream_params;
     param_change_t *rec_params;
+    int             fps_int;   /* 0 = pas de changement FPS */
 } obs_config_t;
 
 /* ── Machine à états ────────────────────────────────────────────── */
@@ -94,6 +100,10 @@ typedef enum {
     STATE_WAIT_STOP_STREAM,
     STATE_STOP_RECORD,
     STATE_WAIT_STOP_RECORD,
+    STATE_GET_VIDEO_SETTINGS,
+    STATE_WAIT_GET_VIDEO_SETTINGS,
+    STATE_APPLY_VIDEO_SETTINGS,
+    STATE_WAIT_VIDEO_SETTINGS,
     STATE_APPLY_STREAM_PARAMS,
     STATE_WAIT_STREAM_PARAM,
     STATE_APPLY_REC_PARAMS,
@@ -111,6 +121,10 @@ typedef struct {
     struct lws     *wsi;
     int             request_id;
     param_change_t *current_param;
+    /* settings vidéo courants récupérés via GetVideoSettings */
+    int             base_width, base_height;
+    int             output_width, output_height;
+    int             fps_num, fps_den;
 } session_t;
 
 static session_t g_session;
@@ -237,18 +251,43 @@ static char *build_set_profile_param(int req_id, const param_change_t *p)
     return build_request("SetProfileParameter", req_id, &data);
 }
 
+static char *build_get_video_settings(int req_id)
+{
+    return build_request("GetVideoSettings", req_id, nullptr);
+}
+
+static char *build_set_video_settings(int req_id, const session_t *s)
+{
+    json data;
+    data["fpsNumerator"]   = s->config.fps_int;
+    data["fpsDenominator"] = 1;
+    data["baseWidth"]      = s->base_width;
+    data["baseHeight"]     = s->base_height;
+    data["outputWidth"]    = s->output_width;
+    data["outputHeight"]   = s->output_height;
+    return build_request("SetVideoSettings", req_id, &data);
+}
+
 /* ── Transitions d'état ─────────────────────────────────────────── */
 
 static client_state_t first_start_state(session_t *s);
+static client_state_t first_param_state(session_t *s);
 
 static client_state_t next_after_stop_stream(session_t *s)
 {
     if (s->config.mode & MODE_RECORD) return STATE_STOP_RECORD;
-    if (s->config.stream_params)      return STATE_APPLY_STREAM_PARAMS;
-    return first_start_state(s);
+    return first_param_state(s);
 }
 
 static client_state_t first_param_state(session_t *s)
+{
+    if (s->config.fps_int > 0)                                     return STATE_GET_VIDEO_SETTINGS;
+    if ((s->config.mode & MODE_STREAM) && s->config.stream_params) return STATE_APPLY_STREAM_PARAMS;
+    if ((s->config.mode & MODE_RECORD) && s->config.rec_params)    return STATE_APPLY_REC_PARAMS;
+    return first_start_state(s);
+}
+
+static client_state_t next_after_video_settings(session_t *s)
 {
     if ((s->config.mode & MODE_STREAM) && s->config.stream_params) return STATE_APPLY_STREAM_PARAMS;
     if ((s->config.mode & MODE_RECORD) && s->config.rec_params)    return STATE_APPLY_REC_PARAMS;
@@ -336,6 +375,32 @@ static void handle_message(session_t *sess, const char *msg)
         lws_callback_on_writable(sess->wsi);
         break;
 
+    case STATE_WAIT_GET_VIDEO_SETTINGS:
+        if (op != 7) break;
+        if (root.contains("d") && root["d"].contains("responseData")) {
+            auto &rd = root["d"]["responseData"];
+            sess->base_width    = rd.value("baseWidth",    1920);
+            sess->base_height   = rd.value("baseHeight",   1080);
+            sess->output_width  = rd.value("outputWidth",  1920);
+            sess->output_height = rd.value("outputHeight", 1080);
+            sess->fps_num       = rd.value("fpsNumerator", 25);
+            sess->fps_den       = rd.value("fpsDenominator", 1);
+            printf("  ✓ Video actuelle: %dx%d -> %dx%d @ %d/%d fps\n",
+                   sess->base_width, sess->base_height,
+                   sess->output_width, sess->output_height,
+                   sess->fps_num, sess->fps_den);
+        }
+        sess->state = STATE_APPLY_VIDEO_SETTINGS;
+        lws_callback_on_writable(sess->wsi);
+        break;
+
+    case STATE_WAIT_VIDEO_SETTINGS:
+        if (op != 7) break;
+        printf("  ✓ FPS appliqué: %d fps\n", sess->config.fps_int);
+        sess->state = next_after_video_settings(sess);
+        lws_callback_on_writable(sess->wsi);
+        break;
+
     case STATE_WAIT_STREAM_PARAM:
         if (op != 7) break;
         printf("  ✓ Stream param [%s/%s] = %s\n",
@@ -405,6 +470,16 @@ static int callback_obs(struct lws *wsi, enum lws_callback_reasons reason,
             printf("[étape] Arrêt de l'enregistrement…\n");
             msg = build_request("StopRecord", ++sess->request_id, nullptr);
             sess->state = STATE_WAIT_STOP_RECORD;
+            break;
+        case STATE_GET_VIDEO_SETTINGS:
+            printf("[étape] Lecture des paramètres vidéo courants…\n");
+            msg = build_get_video_settings(++sess->request_id);
+            sess->state = STATE_WAIT_GET_VIDEO_SETTINGS;
+            break;
+        case STATE_APPLY_VIDEO_SETTINGS:
+            printf("[étape] SetVideoSettings FPS=%d\n", sess->config.fps_int);
+            msg = build_set_video_settings(++sess->request_id, sess);
+            sess->state = STATE_WAIT_VIDEO_SETTINGS;
             break;
         case STATE_APPLY_STREAM_PARAMS:
             if (!sess->current_param) sess->current_param = sess->config.stream_params;
@@ -486,6 +561,8 @@ static void usage(const char *prog)
     "  --sample-rate <n>   FFSamplingRate - fréquence audio (ex: 22050, 44100, 48000)\n"
     "  --ignore-compat <b> FFIgnoreCompat - ignorer compat format (true/false)\n"
     "  --audio-mixes <n>   FFAudioMixes   - masque pistes audio (1=piste1, 2=piste2…)\n\n"
+    "Paramètres vidéo globaux (Video):\n"
+    "  --fps <n>           FPSInt         - fréquence d'images (ex: 15, 25, 30, 50, 60)\n\n"
     "Exemples:\n"
     "  %s -m stream -b 6000\n"
     "  %s -m record --rec-bitrate 4500 -e hevc_nvenc -f mpegts\n"
@@ -516,6 +593,7 @@ int main(int argc, char **argv)
         {"sample-rate",   required_argument, 0, 'r'},
         {"ignore-compat", required_argument, 0, 'I'},
         {"audio-mixes",   required_argument, 0, 'X'},
+        {"fps",           required_argument, 0, 'F'},
         {"help",          no_argument,       0, '?'},
         {0, 0, 0, 0}
     };
@@ -551,6 +629,9 @@ int main(int argc, char **argv)
         case 'r': param_append(&g_session.config.rec_params,    param_new("AdvOut", "FFSamplingRate",       optarg)); break;
         case 'I': param_append(&g_session.config.rec_params,    param_new("AdvOut", "FFIgnoreCompat",       optarg)); break;
         case 'X': param_append(&g_session.config.rec_params,    param_new("AdvOut", "FFAudioMixes",         optarg)); break;
+        case 'F':
+            g_session.config.fps_int = atoi(optarg);
+            break;
         case '?':
         default:
             usage(argv[0]);
@@ -568,6 +649,8 @@ int main(int argc, char **argv)
     printf("  Mode:          %s\n", mode_str);
     printf("  Stream params: %d\n", param_count(g_session.config.stream_params));
     printf("  Rec params:    %d\n", param_count(g_session.config.rec_params));
+    if (g_session.config.fps_int > 0)
+        printf("  FPS cible:     %d\n", g_session.config.fps_int);
     printf("═══════════════════════════════════════════════════\n\n");
 
     for (param_change_t *p = g_session.config.stream_params; p; p = p->next)
