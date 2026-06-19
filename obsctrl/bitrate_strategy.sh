@@ -69,15 +69,15 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
 
     # ── Select tier ──────────────────────────────────────────────────────
     if [ "$bitrate" -lt 200 ]; then
-        resolution="352x288"; audio_br=16;  gop=100; muxdelay="2.0"; sample_rate=22050; overhead=24
+        resolution="352x288"; audio_br=16;  gop=100; muxdelay="2000000"; sample_rate=22050; overhead=24
     elif [ "$bitrate" -lt 500 ]; then
-        resolution="480x360"; audio_br=32;  gop=75;  muxdelay="1.5"; sample_rate=44100; overhead=48
+        resolution="480x360"; audio_br=32;  gop=75;  muxdelay="1500000"; sample_rate=44100; overhead=48
     elif [ "$bitrate" -lt 1500 ]; then
-        resolution="720x576"; audio_br=64;  gop=50;  muxdelay="1.0"; sample_rate=44100; overhead=96
+        resolution="720x576"; audio_br=64;  gop=50;  muxdelay="1000000"; sample_rate=44100; overhead=96
     elif [ "$bitrate" -lt 4000 ]; then
-        resolution="1280x720"; audio_br=96; gop=25;  muxdelay="0.7"; sample_rate=48000; overhead=160
+        resolution="1280x720"; audio_br=96; gop=25;  muxdelay="700000"; sample_rate=48000; overhead=160
     else
-        resolution="1920x1080"; audio_br=128; gop=25; muxdelay="0.5"; sample_rate=48000; overhead=256
+        resolution="1920x1080"; audio_br=128; gop=25; muxdelay="500000"; sample_rate=48000; overhead=256
     fi
 
     video_br=$(( bitrate - audio_br - overhead ))
