@@ -3,7 +3,8 @@
 start() {
 /usr/bin/pluto_mqtt_ctrl </dev/null 2>/dev/null &
 /usr/bin/pluto_stream </dev/null 2>/dev/null &
-
+/root/dvb/mqtt_obs_ctrl.sh </dev/null 2>/dev/null &
+/root/dvb/bitrate_strategy.sh </dev/null 2>/dev/null &
 }
 
 stop() {
