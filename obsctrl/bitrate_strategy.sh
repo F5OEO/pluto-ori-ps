@@ -99,7 +99,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
         continue
     fi
     muxrate=$(( bitrate * 1000 ))
-    bufsize=$(( video_br * 2 ))
+    bufsize=$(( video_br / 2 ))
 
     # ── Read pass-through fields ──────────────────────────────────────────
     host=$(jq_get '.host');       [ -z "$host" ]     && host="localhost"
