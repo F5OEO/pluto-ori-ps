@@ -26,19 +26,20 @@
 #   "url":       "udp://230.0.0.5:10000?pkt_size=1316",   // FFURL
 #   "format":    "mpegts",         // FFFormat        (default: mpegts)
 #   "encoder":   "libx264",        // FFVEncoder      (default: libx264)
-#   "fps":       25                 // frame rate      (default: per-tier)
+#   "fps":       25,                // frame rate      (default: per-tier)
+#   "margin_factor": 0.95          // video headroom factor <1.0 (default: 1.0)
 # }
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # BITRATE STRATEGY TIERS
 # ─────────────────────────────────────────────────────────────────────────────
-# Budget      Resolution   Video    Audio   GOP  muxdelay  sample_rate  fps
-# ──────────  ───────────  ───────  ──────  ───  ────────  ───────────  ───
-# < 200 kbps  352x288      B-16-8   16kbps  100   2.0s     22050 Hz     10
-# 200–499     480x360      B-32-16  32kbps   75   1.5s     44100 Hz     15
-# 500–1499    720x576      B-64-32  64kbps   50   1.0s     44100 Hz     25
-# 1500–3999   1280x720     B-96-64  96kbps   25   0.7s     48000 Hz     25
-# ≥ 4000      1920x1080    B-128-128 128kbps 25   0.5s     48000 Hz     25
+# Budget      Resolution   Video    Audio   GOP  muxdelay  sample_rate  fps  margin
+# ──────────  ───────────  ───────  ──────  ───  ────────  ───────────  ───  ──────
+# < 200 kbps  352x288      B-16-8   16kbps  100   2.0s     22050 Hz     10   0.90
+# 200–499     480x360      B-32-16  32kbps   75   1.5s     44100 Hz     15   0.92
+# 500–1499    720x576      B-64-32  64kbps   50   1.0s     44100 Hz     25   0.95
+# 1500–3999   1280x720     B-96-64  96kbps   25   0.7s     48000 Hz     25   0.95
+# ≥ 4000      1920x1080    B-128-128 128kbps 25   0.5s     48000 Hz     25   0.95
 #
 # muxrate = bitrate * 1000 bps  (CBR stuffing fills to exact budget)
 # video CBR enforced via minrate=maxrate=video_bitrate, bufsize=2×video_bitrate
@@ -70,21 +71,24 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
 
     # ── Select tier ──────────────────────────────────────────────────────
     if [ "$bitrate" -lt 200 ]; then
-        resolution="352x288";  audio_br=16;  gop=100; muxdelay="2000000"; sample_rate=22050; overhead=24;  tier_fps=10
+        resolution="352x288";  audio_br=16;  gop=100; muxdelay="2000000"; sample_rate=22050; overhead=24;  tier_fps=10; margin=0.90
     elif [ "$bitrate" -lt 500 ]; then
-        resolution="480x360";  audio_br=32;  gop=75;  muxdelay="1500000"; sample_rate=44100; overhead=48;  tier_fps=15
+        resolution="480x360";  audio_br=32;  gop=75;  muxdelay="1500000"; sample_rate=44100; overhead=48;  tier_fps=15; margin=0.92
     elif [ "$bitrate" -lt 1500 ]; then
-        resolution="720x576";  audio_br=64;  gop=50;  muxdelay="1000000"; sample_rate=44100; overhead=96;  tier_fps=25
+        resolution="720x576";  audio_br=64;  gop=50;  muxdelay="1000000"; sample_rate=44100; overhead=96;  tier_fps=25; margin=0.95
     elif [ "$bitrate" -lt 4000 ]; then
-        resolution="1280x720"; audio_br=96;  gop=25;  muxdelay="700000";  sample_rate=48000; overhead=160; tier_fps=25
+        resolution="1280x720"; audio_br=96;  gop=25;  muxdelay="700000";  sample_rate=48000; overhead=160; tier_fps=25; margin=0.95
     else
-        resolution="1920x1080"; audio_br=128; gop=25; muxdelay="500000";  sample_rate=48000; overhead=256; tier_fps=25
+        resolution="1920x1080"; audio_br=128; gop=25; muxdelay="500000";  sample_rate=48000; overhead=256; tier_fps=25; margin=0.95
     fi
 
     fps=$(jq_get '.fps')
     [ -z "$fps" ] && fps="$tier_fps"
 
-    video_br=$(( bitrate - audio_br - overhead ))
+    margin_override=$(jq_get '.margin_factor')
+    [ -n "$margin_override" ] && margin="$margin_override"
+
+    video_br=$(awk "BEGIN { printf \"%d\", ($bitrate - $audio_br - $overhead) * $margin }")
     if [ "$video_br" -le 0 ]; then
         echo "  ERROR: bitrate too low ($bitrate kbps), minimum is $(( audio_br + overhead + 1 )) kbps"
         continue
@@ -140,7 +144,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
           | if $url == ""      then del(.url)      else . end'
     )
 
-    echo "  Strategy: ${bitrate}kbps → video=${video_br}k audio=${audio_br}k res=${resolution} fps=${fps} gop=${gop} muxdelay=${muxdelay}s"
+    echo "  Strategy: ${bitrate}kbps → video=${video_br}k audio=${audio_br}k res=${resolution} fps=${fps} gop=${gop} muxdelay=${muxdelay}s margin=${margin}"
     echo "  Publishing to $TOPIC_OUT: $payload"
 
     mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_OUT" -m "$payload"
