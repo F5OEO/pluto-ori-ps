@@ -35,6 +35,7 @@
 #   "video_encoder":  "libx264",      // FFVEncoder — libx264, libx265, hevc_nvenc, …
 #   "video_bitrate":  500,            // FFVBitrate (kbps)
 #   "gop":            50,             // FFVGOPSize
+#   "fps":            25,             // FPSInt — target frame rate
 #   "rescale":        "720x576",      // FFRescaleRes — also sets FFRescale=true
 #   "video_custom":   "minrate=500k maxrate=500k bufsize=1000k",  // FFVCustom
 #
@@ -118,6 +119,9 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$MQTT_TOPIC" | while read -r m
 
     gop=$(jq_get '.gop')
     [ -n "$gop" ] && CMD+=(-g "$gop")
+
+    fps=$(jq_get '.fps')
+    [ -n "$fps" ] && CMD+=(--fps "$fps")
 
     rescale=$(jq_get '.rescale')
     [ -n "$rescale" ] && CMD+=(--rescale "$rescale")
