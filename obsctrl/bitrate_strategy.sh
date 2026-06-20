@@ -71,15 +71,15 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
 
     # ── Select tier ──────────────────────────────────────────────────────
     if [ "$bitrate" -lt 200 ]; then
-        resolution="352x288";  audio_br=16;  gop=100; muxdelay="2000000"; sample_rate=44100; overhead=24;  tier_fps=10; margin=0.90
+        resolution="352x288";  audio_br=64;  gop=100; muxdelay="2000000"; sample_rate=44100; overhead=24;  tier_fps=10; margin=0.70
     elif [ "$bitrate" -lt 500 ]; then
-        resolution="480x360";  audio_br=32;  gop=75;  muxdelay="1500000"; sample_rate=44100; overhead=48;  tier_fps=15; margin=0.92
+        resolution="480x360";  audio_br=64;  gop=75;  muxdelay="1500000"; sample_rate=44100; overhead=48;  tier_fps=15; margin=0.75
     elif [ "$bitrate" -lt 1500 ]; then
-        resolution="720x576";  audio_br=64;  gop=50;  muxdelay="1000000"; sample_rate=44100; overhead=96;  tier_fps=25; margin=0.95
+        resolution="720x576";  audio_br=64;  gop=50;  muxdelay="1000000"; sample_rate=44100; overhead=96;  tier_fps=25; margin=0.8
     elif [ "$bitrate" -lt 4000 ]; then
-        resolution="1280x720"; audio_br=96;  gop=25;  muxdelay="700000";  sample_rate=48000; overhead=160; tier_fps=25; margin=0.95
+        resolution="1280x720"; audio_br=96;  gop=25;  muxdelay="700000";  sample_rate=48000; overhead=160; tier_fps=25; margin=0.85
     else
-        resolution="1920x1080"; audio_br=128; gop=25; muxdelay="500000";  sample_rate=48000; overhead=256; tier_fps=25; margin=0.95
+        resolution="1920x1080"; audio_br=128; gop=25; muxdelay="500000";  sample_rate=48000; overhead=256; tier_fps=25; margin=0.90
     fi
 
     # ── Audio quality rules ───────────────────────────────────────────────
