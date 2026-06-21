@@ -17,12 +17,17 @@ MQTT_PORT="${2:-${MQTT_PORT:-1883}}"
 TOPIC_IN="cmd/encoder/auto_bitrate"
 TOPIC_OUT="cmd/encoder"
 
-# ⚠️ CONFIGURATION CRITIQUE POUR LE BAS DÉBIT AUDIO :
-# - "false" : Permet d'utiliser 'libopus' sous les 600 kbps (Qualité incroyable à 16/32k).
-# - "true"  : Impose l'AAC partout, forçant un plancher de 64k pour éviter la destruction du son.
+# 🎛️ SYSTEM AUDIO CONFIGURATION:
+# Set this to match your locked OBS Global Audio settings (usually 48000 or 44100)
+# This prevents OBS hardware/input initialization crashes.
+SYSTEM_SAMPLE_RATE="48000"
+
+# ⚠️ LOW BITRATE AUDIO CODEC FALLBACK:
+# - "false" : Uses 'libopus' under 600 kbps (Highly recommended: pristine quality at 16/32k at 48kHz).
+# - "true"  : Forces AAC everywhere, applying an aggressive low-pass cutoff to keep it stable.
 FORCE_AAC="true"
 
-echo "[bitrate_strategy] Listening on mqtt://$MQTT_HOST:$MQTT_PORT/$TOPIC_IN (FORCE_AAC=$FORCE_AAC)"
+echo "[bitrate_strategy] Listening on mqtt://$MQTT_HOST:$MQTT_PORT/$TOPIC_IN (System Rate: ${SYSTEM_SAMPLE_RATE}Hz, FORCE_AAC=$FORCE_AAC)"
 
 while true; do
 mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg; do
@@ -44,10 +49,10 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
     # ── Sélection de la stratégie par palier (16:9 Unifié & Presets) ──────
     if [ "$bitrate" -lt 250 ]; then
         resolution="432x240";  audio_br=16; tier_fps=10; muxdelay="2000000"; preset_tier="slower"
-        [ "$FORCE_AAC" = "true" ] && audio_br=64 # Plancher de secours pour l'AAC-LC
+        [ "$FORCE_AAC" = "true" ] && audio_br=64 
     elif [ "$bitrate" -lt 600 ]; then
         resolution="640x360";  audio_br=32; tier_fps=15; muxdelay="1500000"; preset_tier="slow"
-        [ "$FORCE_AAC" = "true" ] && audio_br=64 # Plancher de secours pour l'AAC-LC
+        [ "$FORCE_AAC" = "true" ] && audio_br=64 
     elif [ "$bitrate" -lt 1500 ]; then
         resolution="960x540";  audio_br=64; tier_fps=25; muxdelay="1000000"; preset_tier="medium"
     elif [ "$bitrate" -lt 3500 ]; then
@@ -61,22 +66,21 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
     [ -z "$fps" ] && fps="$tier_fps"
     gop=$(( fps * 2 ))
 
-    # ── Intelligence Audio (Routage dynamique Opus vs AAC-LC) ──────────────
+    # ── Audio Optimization (Using internal encoder cutoffs instead of dynamic resampling) ──
     if [ "$audio_br" -le 32 ] && [ "$FORCE_AAC" != "true" ]; then
         audio_encoder="libopus"
-        sample_rate=48000 # Opus excelle à 48kHz, même à 16 kbps grâce à son architecture hybride
-        audio_custom="-ac 1"
+        # Opus natively handles low bitrates perfectly at 48kHz via automatic internal downsampling
+        audio_custom="channels=1"
     else
         audio_encoder="aac"
-        audio_custom=""
         if [ "$audio_br" -le 32 ]; then
-            sample_rate=24000
-            audio_custom="-ac 1"
+            # Aggressive 6kHz cutoff to save low-bitrate AAC from watery/metallic distortion
+            audio_custom="channels=1 cutoff=6000"
         elif [ "$audio_br" -le 64 ]; then
-            sample_rate=44100
-            audio_custom="-ac 1" # Forcer le mono à 64k pour maximiser l'AAC-LC
+            # 9kHz cutoff optimizes mono 64k for speech/clarity by discarding high-frequency noise
+            audio_custom="channels=1 cutoff=9000"
         else
-            sample_rate=48000
+            audio_custom=""
         fi
     fi
 
@@ -122,7 +126,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
         --arg  video_custom "minrate=${video_br}k maxrate=${video_br}k bufsize=${bufsize}k -x264-params ${x264_args}" \
         --argjson audio_br  "$audio_br"   \
         --arg  audio_encoder "$audio_encoder" \
-        --argjson sample_rate "$sample_rate" \
+        --argjson sample_rate "$SYSTEM_SAMPLE_RATE" \
         --arg  audio_custom "$audio_custom" \
         --argjson gop       "$gop"        \
         --argjson fps       "$fps"        \
@@ -151,9 +155,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
           | if $audio_custom == "" then del(.audio_custom) else . end'
     )
 
-    channels_str="${audio_custom:+"mono"}"
-    [ -z "$channels_str" ] && channels_str="stereo"
-    echo "  Strategy: ${bitrate}kbps → video=${video_br}k audio=${audio_br}k via [${audio_encoder}]/${sample_rate}Hz/${channels_str} res=${resolution} fps=${fps}"
+    echo "  Strategy: ${bitrate}kbps → video=${video_br}k audio=${audio_br}k via [${audio_encoder}]/${SYSTEM_SAMPLE_RATE}Hz/custom=[${audio_custom}] res=${resolution}"
     echo "  Publishing to $TOPIC_OUT: $payload"
 
     mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_OUT" -m "$payload"
