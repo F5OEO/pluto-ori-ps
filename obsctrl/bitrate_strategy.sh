@@ -27,22 +27,27 @@
 #   "format":    "mpegts",         // FFFormat        (default: mpegts)
 #   "encoder":   "libx264",        // FFVEncoder      (default: libx264)
 #   "fps":       25,                // frame rate      (default: per-tier)
-#   "margin_factor": 0.95          // video headroom factor <1.0 (default: 1.0)
+#   "margin_factor": 0.90          // total headroom factor including TS overhead (default: 0.90)
 # }
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# BITRATE STRATEGY TIERS
+# DEEP-OPTIMISED 16:9 CBR STRATEGY TIERS (Max Subjective Quality)
 # ─────────────────────────────────────────────────────────────────────────────
-# Budget      Resolution   Video    Audio   GOP  muxdelay  sample_rate  channels  fps  margin
-# ──────────  ───────────  ───────  ──────  ───  ────────  ───────────  ────────  ───  ──────
-# < 200 kbps  352x288      B-16-8   16kbps  100   2.0s     24000 Hz     mono      10   0.90
-# 200–499     480x360      B-32-16  32kbps   75   1.5s     24000 Hz     mono      15   0.92
-# 500–1499    720x576      B-64-32  64kbps   50   1.0s     44100 Hz     stereo    25   0.95
-# 1500–3999   1280x720     B-96-64  96kbps   25   0.7s     48000 Hz     stereo    25   0.95
-# ≥ 4000      1920x1080    B-128-128 128kbps 25   0.5s     48000 Hz     stereo    25   0.95
+# Budget      Resolution   Video BR        Audio BR  GOP (2s)  x264 Preset  sample_rate  channels  fps
+# ──────────  ───────────  ──────────────  ────────  ────────  ───────────  ───────────  ────────  ───
+# < 250 kbps  432x240      (Total*0.9)-16  16 kbps    20       slower       24000 Hz     mono      10
+# 250–599     640x360      (Total*0.9)-32  32 kbps    30       slow         24000 Hz     mono      15
+# 600–1499    960x540      (Total*0.9)-64  64 kbps    50       medium       44100 Hz     stereo    25
+# 1500–3499   1280x720     (Total*0.9)-96  96 kbps    50       medium       48000 Hz     stereo    25
+# ≥ 3500      1920x1080    (Total*0.9)-128 128 kbps   50       medium       48000 Hz     stereo    25
 #
-# muxrate = bitrate * 1000 bps  (CBR stuffing fills to exact budget)
-# video CBR enforced via minrate=maxrate=video_bitrate, bufsize=2×video_bitrate
+# Advanced x264 CBR Tuning applied:
+# - nal-hrd=cbr + minrate/maxrate to force strict padding stuffing.
+# - bufsize=video_bitrate (1s window) to prevent aggressive macroblocking on keyframes.
+# - profile=high to enable 8x8 transform spatial optimization.
+# - bf=3:b-adapt=2 to maximize compression efficiency on static areas.
+# - rc-lookahead=40 to smoothly buffer and anticipate scene cuts.
+# - aq-mode=1 to prevent severe color banding in flat gradients and dark zones.
 # ─────────────────────────────────────────────────────────────────────────────
 
 MQTT_HOST="${1:-${MQTT_HOST:-localhost}}"
@@ -69,39 +74,56 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
         continue
     fi
 
-    # ── Select tier ──────────────────────────────────────────────────────
-    if [ "$bitrate" -lt 200 ]; then
-        resolution="352x288";  audio_br=32;  gop=100; muxdelay="2000000"; sample_rate=44100; overhead=24;  tier_fps=10; margin=0.70
-    elif [ "$bitrate" -lt 500 ]; then
-        resolution="480x360";  audio_br=32;  gop=75;  muxdelay="1500000"; sample_rate=44100; overhead=48;  tier_fps=15; margin=0.75
+    # ── Sélection de la stratégie par palier (16:9 Unifié & Presets Dynamiques) ──
+    if [ "$bitrate" -lt 250 ]; then
+        resolution="432x240";  audio_br=16; tier_fps=10; muxdelay="2000000"; preset_tier="slower"
+    elif [ "$bitrate" -lt 600 ]; then
+        resolution="640x360";  audio_br=32; tier_fps=15; muxdelay="1500000"; preset_tier="slow"
     elif [ "$bitrate" -lt 1500 ]; then
-        resolution="720x576";  audio_br=64;  gop=50;  muxdelay="1000000"; sample_rate=44100; overhead=96;  tier_fps=25; margin=0.8
-    elif [ "$bitrate" -lt 4000 ]; then
-        resolution="1280x720"; audio_br=96;  gop=25;  muxdelay="700000";  sample_rate=48000; overhead=160; tier_fps=25; margin=0.85
+        resolution="960x540";  audio_br=64; tier_fps=25; muxdelay="1000000"; preset_tier="medium"
+    elif [ "$bitrate" -lt 3500 ]; then
+        resolution="1280x720"; audio_br=96; tier_fps=25; muxdelay="700000";  preset_tier="medium"
     else
-        resolution="1920x1080"; audio_br=128; gop=25; muxdelay="500000";  sample_rate=48000; overhead=256; tier_fps=25; margin=0.90
+        resolution="1920x1080"; audio_br=128; tier_fps=25; muxdelay="500000"; preset_tier="medium"
     fi
 
-    # ── Audio quality rules ───────────────────────────────────────────────
-    [ "$audio_br" -lt 64 ] && sample_rate=24000
-    audio_custom=""
-    [ "$audio_br" -le 32 ] && audio_custom="-ac 1"
-
+    # ── Application des règles FPS et GOP (GOP dynamique de 2 secondes) ────
     fps=$(jq_get '.fps')
     [ -z "$fps" ] && fps="$tier_fps"
+    gop=$(( fps * 2 ))
 
+    # ── Audio à bas débit (Optimisation échantillonnage & canaux) ──────────
+    sample_rate=48000
+    audio_custom=""
+    if [ "$audio_br" -le 32 ]; then
+        sample_rate=24000
+        audio_custom="-ac 1"
+    elif [ "$audio_br" -le 64 ]; then
+        sample_rate=44100
+    fi
+
+    # ── Calcul de la bande passante Vidéo (Marge brute de 10% pour le TS Mux) ──
     margin_override=$(jq_get '.margin_factor')
-    [ -n "$margin_override" ] && margin="$margin_override"
+    if [ -n "$margin_override" ]; then
+        margin="$margin_override"
+    else
+        margin="0.90" # 90% pour l'audio+vidéo, 10% réservés aux en-têtes MPEG-TS
+    fi
 
-    video_br=$(awk "BEGIN { printf \"%d\", ($bitrate - $audio_br - $overhead) * $margin }")
+    video_br=$(awk "BEGIN { printf \"%d\", ($bitrate * $margin) - $audio_br }")
     if [ "$video_br" -le 0 ]; then
-        echo "  ERROR: bitrate too low ($bitrate kbps), minimum is $(( audio_br + overhead + 1 )) kbps"
+        echo "  ERROR: bitrate too low ($bitrate kbps), video budget collapsed."
         continue
     fi
+    
     muxrate=$(( bitrate * 1000 ))
-    bufsize=$(( video_br / 2 ))
+    bufsize=$video_br
 
-    # ── Read pass-through fields ──────────────────────────────────────────
+    # ── Agrégation des arguments avancés de libx264 ────────────────────────
+    # Combine HRD CBR, le profil High, le preset de palier, le Lookahead, les B-Frames et l'AQ-mode
+    x264_args="nal-hrd=cbr:profile=high:preset=${preset_tier}:bf=3:b-adapt=2:rc-lookahead=40:aq-mode=1"
+
+    # ── Récupération des variables pass-through ──────────────────────────
     host=$(jq_get '.host');       [ -z "$host" ]     && host="localhost"
     port=$(jq_get '.port');       [ -z "$port" ]     && port="4455"
     password=$(jq_get '.password')
@@ -110,7 +132,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
     format=$(jq_get '.format');   [ -z "$format" ]   && format="mpegts"
     encoder=$(jq_get '.encoder'); [ -z "$encoder" ]  && encoder="libx264"
 
-    # ── Build output JSON ─────────────────────────────────────────────────
+    # ── Construction du Payload JSON (Avec injection des paramètres psycho-visuels) ──
     payload=$(jq -cn \
         --arg  host         "$host"       \
         --argjson port      "$port"       \
@@ -120,7 +142,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
         --arg  url          "$url"        \
         --arg  encoder      "$encoder"    \
         --argjson video_br  "$video_br"   \
-        --arg  video_custom "minrate=${video_br}k maxrate=${video_br}k bufsize=${bufsize}k" \
+        --arg  video_custom "minrate=${video_br}k maxrate=${video_br}k bufsize=${bufsize}k -x264-params ${x264_args}" \
         --argjson audio_br  "$audio_br"   \
         --arg  audio_encoder "aac"        \
         --argjson sample_rate "$sample_rate" \
@@ -152,8 +174,9 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
           | if $audio_custom == "" then del(.audio_custom) else . end'
     )
 
-    channels_str="${audio_custom:+mono}"
-    echo "  Strategy: ${bitrate}kbps → video=${video_br}k audio=${audio_br}k/${sample_rate}Hz${channels_str:+/}${channels_str} res=${resolution} fps=${fps} gop=${gop} muxdelay=${muxdelay}s margin=${margin}"
+    channels_str="${audio_custom:+"mono"}"
+    [ -z "$channels_str" ] && channels_str="stereo"
+    echo "  Strategy: ${bitrate}kbps → video=${video_br}k audio=${audio_br}k/${sample_rate}Hz/${channels_str} res=${resolution} fps=${fps} gop=${gop} preset=${preset_tier} margin=${margin}"
     echo "  Publishing to $TOPIC_OUT: $payload"
 
     mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_OUT" -m "$payload"
