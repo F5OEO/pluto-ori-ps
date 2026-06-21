@@ -48,17 +48,17 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
 
     # ── Sélection de la stratégie par palier (16:9 Unifié & Presets) ──────
     if [ "$bitrate" -lt 250 ]; then
-        resolution="432x240";  audio_br=16; tier_fps=10; muxdelay="2000000"; preset_tier="slower"
+        resolution="432x240";  audio_br=16; tier_fps=10; muxdelay="2000000"; preset_tier="slower" ;  margin="0.70"
         [ "$FORCE_AAC" = "true" ] && audio_br=64 
     elif [ "$bitrate" -lt 600 ]; then
-        resolution="640x360";  audio_br=32; tier_fps=15; muxdelay="1500000"; preset_tier="slow"
+        resolution="640x360";  audio_br=32; tier_fps=15; muxdelay="1500000"; preset_tier="slow";  margin="0.75"
         [ "$FORCE_AAC" = "true" ] && audio_br=64 
     elif [ "$bitrate" -lt 1500 ]; then
-        resolution="960x540";  audio_br=64; tier_fps=25; muxdelay="1000000"; preset_tier="medium"
+        resolution="960x540";  audio_br=64; tier_fps=25; muxdelay="1000000"; preset_tier="medium";  margin="0.80"
     elif [ "$bitrate" -lt 3500 ]; then
-        resolution="1280x720"; audio_br=96; tier_fps=25; muxdelay="700000";  preset_tier="medium"
+        resolution="1280x720"; audio_br=96; tier_fps=25; muxdelay="700000";  preset_tier="medium";  margin="0.85"
     else
-        resolution="1920x1080"; audio_br=128; tier_fps=25; muxdelay="500000"; preset_tier="medium"
+        resolution="1920x1080"; audio_br=128; tier_fps=25; muxdelay="500000"; preset_tier="medium";  margin="0.90"
     fi
 
     # ── Application des règles FPS et GOP (GOP dynamique de 2 secondes) ────
@@ -84,13 +84,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
         fi
     fi
 
-    # ── Calcul de la bande passante Vidéo (Marge brute de 10% pour le TS Mux) ──
-    margin_override=$(jq_get '.margin_factor')
-    if [ -n "$margin_override" ]; then
-        margin="$margin_override"
-    else
-        margin="0.85"
-    fi
+    
 
     video_br=$(awk "BEGIN { printf \"%d\", ($bitrate * $margin) - $audio_br }")
     if [ "$video_br" -le 0 ]; then
