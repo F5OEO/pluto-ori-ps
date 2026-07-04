@@ -47,24 +47,27 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
     fi
 
     # ── Sélection de la stratégie par palier (16:9 Unifié & Presets) ──────
-    if [ "$bitrate" -lt 250 ]; then
-        resolution="432x240";  audio_br=16; tier_fps=10; muxdelay="2000000"; preset_tier="slower" ;  margin="0.70"
-        [ "$FORCE_AAC" = "true" ] && audio_br=64 
+    if [ "$bitrate" -lt 150 ]; then
+        resolution="432x240";  audio_br=16; tier_fps=10; muxdelay="4000000"; preset_tier="slower" ;  margin="0.55"
+        [ "$FORCE_AAC" = "true" ] ; gop=40 && audio_br=64 
+    elif [ "$bitrate" -lt 250 ]; then    
+        resolution="432x240";  audio_br=16; tier_fps=10; muxdelay="3000000"; preset_tier="slower" ;  margin="0.60"
+        [ "$FORCE_AAC" = "true" ] ; gop=40 && audio_br=64    
     elif [ "$bitrate" -lt 600 ]; then
         resolution="640x360";  audio_br=32; tier_fps=15; muxdelay="1500000"; preset_tier="slow";  margin="0.75"
-        [ "$FORCE_AAC" = "true" ] && audio_br=64 
+        [ "$FORCE_AAC" = "true" ] ; gop=35 && audio_br=64 
     elif [ "$bitrate" -lt 1500 ]; then
-        resolution="960x540";  audio_br=64; tier_fps=25; muxdelay="1000000"; preset_tier="medium";  margin="0.80"
+        resolution="960x540";  audio_br=64; tier_fps=25; muxdelay="1000000"; preset_tier="medium";  margin="0.80" ; gop=50
     elif [ "$bitrate" -lt 3500 ]; then
-        resolution="1280x720"; audio_br=96; tier_fps=25; muxdelay="700000";  preset_tier="medium";  margin="0.85"
+        resolution="1280x720"; audio_br=96; tier_fps=25; muxdelay="700000";  preset_tier="medium";  margin="0.85" ; gop=50
     else
-        resolution="1920x1080"; audio_br=128; tier_fps=25; muxdelay="500000"; preset_tier="medium";  margin="0.90"
+        resolution="1920x1080"; audio_br=128; tier_fps=25; muxdelay="500000"; preset_tier="medium";  margin="0.90" ; gop=50
     fi
 
     # ── Application des règles FPS et GOP (GOP dynamique de 2 secondes) ────
     fps=$(jq_get '.fps')
     [ -z "$fps" ] && fps="$tier_fps"
-    gop=$(( fps * 2 ))
+    #gop=$(( fps * 2 ))
 
     # ── Audio Optimization (Using internal encoder cutoffs instead of dynamic resampling) ──
     if [ "$audio_br" -le 32 ] && [ "$FORCE_AAC" != "true" ]; then
@@ -96,7 +99,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
     bufsize=$video_br
 
     # ── Configuration x264 Avancée ────────────────────────────────────────
-    x264_args="nal-hrd=cbr:profile=high:preset=${preset_tier}:bf=3:b-adapt=2:rc-lookahead=40:aq-mode=1"
+    x264_args="nal-hrd=cbr:b-adapt=2:rc-lookahead=40:aq-mode=1:tune=hq:no-scenecut=1"
 
     # ── Récupération des variables pass-through ──────────────────────────
     host=$(jq_get '.host');       [ -z "$host" ]     && host="localhost"
@@ -117,7 +120,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
         --arg  url          "$url"        \
         --arg  encoder      "$encoder"    \
         --argjson video_br  "$video_br"   \
-        --arg  video_custom "minrate=${video_br}k maxrate=${video_br}k bufsize=${bufsize}k -x264-params ${x264_args}" \
+        --arg  video_custom "minrate=${video_br}k maxrate=${video_br}k bufsize=${bufsize}k profile=high preset=${preset_tier} x264-params=${x264_args}" \
         --argjson audio_br  "$audio_br"   \
         --arg  audio_encoder "$audio_encoder" \
         --argjson sample_rate "$SYSTEM_SAMPLE_RATE" \
@@ -125,7 +128,7 @@ mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$TOPIC_IN" | while read -r msg
         --argjson gop       "$gop"        \
         --argjson fps       "$fps"        \
         --arg  rescale      "$resolution" \
-        --arg  mux_custom   "muxrate=$muxrate muxdelay=$muxdelay" \
+        --arg  mux_custom   "muxrate=$muxrate max_delay=$muxdelay" \
         '{
             host:          $host,
             port:          $port,
