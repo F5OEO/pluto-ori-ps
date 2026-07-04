@@ -555,7 +555,7 @@ static void encode_from_prebuf()
 
         TsEntry e = g_ts_prebuf.front();
         g_ts_prebuf.pop();
-
+        
         #ifdef WITH_PCR
         // Drop null packets here — they passed through ingestion for PCR
         // correction but must not consume BBframe capacity.
@@ -583,7 +583,7 @@ static void encode_from_prebuf()
             SetPacketPCR(e.pkt, (uint64_t)corrected);
             pcr_drop_correction = 0;
         }
-
+        #endif
         // Stamp the continuity counter for stuffing packets at encoding time
         // so the counter reflects what actually goes on air.  Also accumulate a
         // positive PCR correction: inserting a stuffing packet pushes subsequent
@@ -615,7 +615,7 @@ static void encode_from_prebuf()
             correctcc(e.pkt, g_ts_discontinuity);
             g_ts_discontinuity = false;
         }
-        #endif
+        
         debug_ts_mirror_send(e.pkt);
         unsigned short *bbframeptr =
             (unsigned short *)dvbs2neon_packet(0, (uint32)(e.pkt), 0);
