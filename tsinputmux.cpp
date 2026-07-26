@@ -499,7 +499,6 @@ void adaptive_modcod_notify_underflow()
 
 struct TsEntry {
     uint8_t pkt[188];
-    bool    isSdt;
 };
 
 static queue<TsEntry> g_ts_prebuf;
@@ -507,7 +506,7 @@ static bool            g_bbframe_at_start  = true;
 static DVB2FrameFormat g_bbframe_active_fmt;
 static bool            g_ts_discontinuity  = false; // set after a BBframe queue purge
 
-static void prebuf_push(const uint8_t *src, bool isSdt)
+static void prebuf_push(const uint8_t *src)
 {
     if ((int)g_ts_prebuf.size() >= TS_PREBUF_MAX)
     {
@@ -516,7 +515,6 @@ static void prebuf_push(const uint8_t *src, bool isSdt)
     }
     TsEntry e;
     memcpy(e.pkt, src, 188);
-    e.isSdt = isSdt;
     g_ts_prebuf.push(e);
 }
 
@@ -604,14 +602,14 @@ static void encode_from_prebuf()
                 pcr_drop_correction += (int64_t)188 * 8 * 27000000LL / (int64_t)net_bps;
         }
         
-        if (e.isSdt)
-            update_cont_counter(customsdt);
-
         if (GetPid((char *)e.pkt) != 0x1FFF && GetPid((char *)e.pkt) != 0x1FFE)
         {
-            // correctcc rewrites CC to maintain continuity; after a queue purge
-            // it also sets the discontinuity_indicator so the receiver knows
-            // data was intentionally skipped rather than counting it as an error.
+            // correctcc rewrites CC to maintain continuity (including for the
+            // injected SDT packet, PID 0x11 — it isn't excluded here, so its
+            // CC is tracked the same way as any other PID); after a queue
+            // purge it also sets the discontinuity_indicator so the receiver
+            // knows data was intentionally skipped rather than counting it as
+            // an error.
             correctcc(e.pkt, g_ts_discontinuity);
             g_ts_discontinuity = false;
         }
@@ -985,20 +983,21 @@ void addneonts(uint8_t *tspacket, size_t length)
 
         if (GetPid((char *)cur_packet) == 0x11)
         {
-            // SDT: buffer the replacement packet; counter update deferred to encode phase
-            prebuf_push(customsdt, true);
+            // SDT: buffer the replacement packet; its CC is assigned like any
+            // other PID's, in encode_from_prebuf() via correctcc().
+            prebuf_push(customsdt);
         }
         /*
         else if (GetPid((char *)cur_packet) == 0x1FFF)
         {
-            prebuf_push(customnullpacket, false);
+            prebuf_push(customnullpacket);
         }*/
         else
         {
             /*size_t piderror = InspectCC(cur_packet, 188);
             if (piderror != 8192)
                 Lastpidccerror = piderror;*/
-            prebuf_push(cur_packet, false);
+            prebuf_push(cur_packet);
         }
     }
 
