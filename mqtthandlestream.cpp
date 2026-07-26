@@ -1511,6 +1511,12 @@ void *tx_buffer_thread(void *arg)
     
     while (true)
     {
+        // Keep the BBframe encoder's modcod in sync even while paused: the TS
+        // ingestion thread (rx_ts_thread) keeps encoding into m_bbframe_queue
+        // regardless of RunTx, so if this were only called below (gated by
+        // RunTx) a fec/constellation/frame change made while paused would sit
+        // unapplied and the queue would fill up with stale-format BBframes.
+        SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate, m_Pilots);
 
         if (RunTx)
         {
@@ -1523,8 +1529,7 @@ void *tx_buffer_thread(void *arg)
             {
                 if (m_CodeRate == 0xFF)
                     break;
-                
-                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate, m_Pilots);
+
                 // fprintf(stderr,"Queue %d\n",m_bbframe_queue.size());
                 if (!m_bbframe_queue.empty())
                 {
@@ -1538,6 +1543,13 @@ void *tx_buffer_thread(void *arg)
                 }
                 else // No more data : need padding
                 {
+                    // Before stuffing, yield 100 µs if real UDP data is already
+                    // waiting in the socket — gives rx_ts_thread a chance to
+                    // process it first and avoid a "fake" null packet.
+                    extern bool ts_udp_data_pending();
+                    if (ts_udp_data_pending())
+                        usleep(100);
+
                     // setpaddingts() uses PID 0x1FFE which passes through the
                     // fec_variable null-stripping filter (only 0x1FFF is stripped).
                     // Safe to call in both fixed and variable mode.
@@ -1545,7 +1557,7 @@ void *tx_buffer_thread(void *arg)
                         setpaddingts();
                     if (m_txmode == tx_dvbs2_gse)
                         setpaddinggse();
-                
+
                 }
             };
             break;
@@ -1578,7 +1590,6 @@ void *tx_buffer_thread(void *arg)
             break;
             case tx_dvbs:
             {
-                SetModCode(m_CodeFrame, m_CodeConstel, m_CodeRate, m_Pilots);
                 if (!m_bbframe_queue.empty())
                 {
                     ssize_t sent=0;
@@ -1759,6 +1770,8 @@ void PubTelemetry()
     if (m_txmode == tx_dvbs2_ts)
     {
         publish("tx/dvbs2/ts/bitrate", float(m_SRtx * (m_efficiency / (float)4e6)));
+        if (m_tssource == 0) // tssource_udp
+            publish("tx/dvbs2/ts/inputbitrate", (float)get_ts_udp_input_bitrate_bps());
         publish("tx/dvbs2/ts/fecvariable", (char *)TabFec[m_variable_ts_coderate]);
         extern size_t Lastpidccerror;
         if(Lastpidccerror!=8192)
