@@ -16,4 +16,5 @@ extern char m_mcast_iface[255];
 extern char m_ts_filename[255];
 extern uint m_ts_filebitrate;
 extern void updatesdt(char *custom);
+extern uint32_t get_ts_udp_input_bitrate_bps();
 #endif

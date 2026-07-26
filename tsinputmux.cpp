@@ -1304,6 +1304,41 @@ bool ts_udp_data_pending()
     return avail >= 188;
 }
 
+// =============================================================================
+//  Raw UDP input bitrate — counts every byte received on the TS UDP socket
+//  (unlike BitrateEstimator above, which excludes null/stuffing packets for
+//  adaptive-modcod purposes). Recomputed once per second so PubTelemetry()
+//  can report what the UDP source is actually sending, e.g. to spot a CBR
+//  source running at a different rate than expected.
+// =============================================================================
+static size_t   g_udpInputBytes = 0;
+static uint32_t g_udpInputBitrateBps = 0;
+
+static void count_udp_input(size_t bytes)
+{
+    static struct timespec lastCalc = {0, 0};
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    if (lastCalc.tv_sec == 0)
+        lastCalc = now;
+
+    g_udpInputBytes += bytes;
+
+    double elapsed = (now.tv_sec - lastCalc.tv_sec) + (now.tv_nsec - lastCalc.tv_nsec) / 1e9;
+    if (elapsed >= 1.0)
+    {
+        g_udpInputBitrateBps = (uint32_t)((g_udpInputBytes * 8ULL) / elapsed);
+        g_udpInputBytes = 0;
+        lastCalc = now;
+    }
+}
+
+uint32_t get_ts_udp_input_bitrate_bps()
+{
+    return g_udpInputBitrateBps;
+}
+
 void *rx_ts_thread(void *arg)
 {
     unsigned char tspacket[7 * 188];
@@ -1340,6 +1375,9 @@ void *rx_ts_thread(void *arg)
 
         if (length > 0)
         {
+            if (m_tssource == tssource_udp)
+                count_udp_input((size_t)length);
+
             pthread_mutex_lock(&buffer_mutexts);
             if (m_txmode == tx_dvbs2_ts)
                 addneonts(tspacket, length);
@@ -1356,6 +1394,7 @@ void *rx_ts_thread(void *arg)
                 ssize_t extra_len;
                 while ((extra_len = recv(recv_ts_sock, extra, sizeof(extra), MSG_DONTWAIT)) > 0)
                 {
+                    count_udp_input((size_t)extra_len);
                     pthread_mutex_lock(&buffer_mutexts);
                     if (m_txmode == tx_dvbs2_ts)
                         addneonts(extra, (int)extra_len);
