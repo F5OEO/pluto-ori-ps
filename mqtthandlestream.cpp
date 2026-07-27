@@ -1375,9 +1375,18 @@ bool GetInterfaceip(char *if_name, char *ip)
     return true;
 }
 
+bool publish(char *mqttkey, char *svalue, bool isstatus);
+
 void SetTxMode(int Mode)
 {
      fprintf(stderr, "Try to Change txmode %d\n", Mode);
+
+    // Passthrough feeds the DAC directly; reconfiguring the TX channel/FPGA
+    // mode while leaving it can transmit transient garbage. Mute over MQTT —
+    // pluto_mqtt_ctrl's cmd_txmute powers down the TX LO — before the switch.
+    if (m_txmode == tx_passtrough && Mode != tx_passtrough)
+        publish("tx/mute", (char *)"1", false);
+
     pthread_mutex_lock(&bufpluto_mutextx);
     bool inittxok=false;
     switch (Mode)
