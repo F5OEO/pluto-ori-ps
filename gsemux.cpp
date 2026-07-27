@@ -156,7 +156,7 @@ int tun_create(char *name, const char *ip)
     sprintf(stunpath, "/dev/net/tun");
     if ((fd = open(stunpath, O_RDWR)) < 0)
     {
-        fprintf(stderr, "Tun error\n");
+        fprintf(stderr, "Tun error: open(%s) failed: %s (errno=%d)\n", stunpath, strerror(errno), errno);
         return fd;
     }
     /* flags: IFF_TUN   - TUN device (no Ethernet headers)
@@ -170,6 +170,7 @@ int tun_create(char *name, const char *ip)
     /* create the TUN interface */
     if ((err = ioctl(fd, TUNSETIFF, (void *)&ifr)) < 0)
     {
+        fprintf(stderr, "Tun error: ioctl(%s, TUNSETIFF) failed: %s (errno=%d)\n", name, strerror(errno), errno);
         close(fd);
         return err;
     }
@@ -187,6 +188,7 @@ int tun_create(char *name, const char *ip)
     ifr.ifr_flags |= IFF_UP;
     if ((err = ioctl(sockfd, SIOCSIFFLAGS, (void *)&ifr)) < 0)
     {
+        fprintf(stderr, "Tun error: ioctl(%s, SIOCSIFFLAGS) failed: %s (errno=%d)\n", name, strerror(errno), errno);
         close(fd);
         return err;
     }
